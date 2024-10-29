@@ -26,7 +26,7 @@ contract PredictDotLoan_AcceptLoanOfferAndFillOrder_Test is TestHelpers {
         mockCTF.setApprovalForAll(address(predictDotLoan), true);
         vm.stopPrank();
 
-        _mintCTF(whiteKnight);
+        _mintCTF(whiteKnight, COLLATERAL_AMOUNT);
 
         vm.startPrank(whiteKnight);
         mockCTF.setApprovalForAll(address(mockCTFExchange), true);
@@ -41,7 +41,7 @@ contract PredictDotLoan_AcceptLoanOfferAndFillOrder_Test is TestHelpers {
         Order memory order = _createMockCTFSellOrder();
 
         IPredictDotLoan.Proposal memory proposal = _generateLoanOffer(IPredictDotLoan.QuestionType.Binary);
-        uint256 protocolFee = (order.takerAmount * protocolFeeBasisPoints) / 10_000;
+        uint256 protocolFee = (order.takerAmount * protocolFeeBasisPoints) / (10_000 - protocolFeeBasisPoints);
         proposal.loanAmount = order.takerAmount + protocolFee;
         proposal.signature = _signProposal(proposal);
 
@@ -62,7 +62,10 @@ contract PredictDotLoan_AcceptLoanOfferAndFillOrder_Test is TestHelpers {
         assertEq(mockERC20.balanceOf(address(predictDotLoan)), 0);
         assertEq(mockERC20.balanceOf(borrower), 0);
         assertEq(mockERC20.balanceOf(whiteKnight), order.takerAmount);
-        assertEq(mockERC20.balanceOf(protocolFeeRecipient), (order.takerAmount * protocolFeeBasisPoints) / 10_000);
+        assertEq(
+            mockERC20.balanceOf(protocolFeeRecipient),
+            (order.takerAmount * protocolFeeBasisPoints) / (10_000 - protocolFeeBasisPoints)
+        );
         assertEq(mockCTF.balanceOf(address(predictDotLoan), _getPositionId(true)), proposal.collateralAmount);
         _assertLoanOfferFulfillmentData(proposal);
 
@@ -85,7 +88,7 @@ contract PredictDotLoan_AcceptLoanOfferAndFillOrder_Test is TestHelpers {
         order.feeRateBps = orderFeeRateBps;
 
         IPredictDotLoan.Proposal memory proposal = _generateLoanOffer(IPredictDotLoan.QuestionType.Binary);
-        uint256 protocolFee = (order.takerAmount * protocolFeeBasisPoints) / 10_000;
+        uint256 protocolFee = (order.takerAmount * protocolFeeBasisPoints) / (10_000 - protocolFeeBasisPoints);
         proposal.loanAmount = order.takerAmount + protocolFee;
         proposal.signature = _signProposal(proposal);
 
@@ -106,7 +109,10 @@ contract PredictDotLoan_AcceptLoanOfferAndFillOrder_Test is TestHelpers {
         assertEq(mockERC20.balanceOf(address(predictDotLoan)), 0);
         assertEq(mockERC20.balanceOf(borrower), 0);
         assertEq(mockERC20.balanceOf(whiteKnight), order.takerAmount);
-        assertEq(mockERC20.balanceOf(protocolFeeRecipient), (order.takerAmount * protocolFeeBasisPoints) / 10_000);
+        assertEq(
+            mockERC20.balanceOf(protocolFeeRecipient),
+            (order.takerAmount * protocolFeeBasisPoints) / (10_000 - protocolFeeBasisPoints)
+        );
         assertEq(mockCTF.balanceOf(address(predictDotLoan), _getPositionId(true)), proposal.collateralAmount);
         _assertLoanOfferFulfillmentData(proposal);
 
@@ -129,7 +135,7 @@ contract PredictDotLoan_AcceptLoanOfferAndFillOrder_Test is TestHelpers {
         order.feeRateBps = minimumOrderFeeRate * 2;
 
         IPredictDotLoan.Proposal memory proposal = _generateLoanOffer(IPredictDotLoan.QuestionType.Binary);
-        uint256 protocolFee = (order.takerAmount * protocolFeeBasisPoints) / 10_000;
+        uint256 protocolFee = (order.takerAmount * protocolFeeBasisPoints) / (10_000 - protocolFeeBasisPoints);
         proposal.loanAmount = order.takerAmount + protocolFee;
         proposal.signature = _signProposal(proposal);
 
@@ -149,10 +155,13 @@ contract PredictDotLoan_AcceptLoanOfferAndFillOrder_Test is TestHelpers {
 
         assertEq(mockERC20.balanceOf(address(predictDotLoan)), 0);
         assertEq(mockERC20.balanceOf(borrower), 0);
-        assertGt(mockERC20.balanceOf(protocolFeeRecipient), (order.takerAmount * protocolFeeBasisPoints) / 10_000);
+        assertGt(
+            mockERC20.balanceOf(protocolFeeRecipient),
+            (order.takerAmount * protocolFeeBasisPoints) / (10_000 - protocolFeeBasisPoints)
+        );
         uint256 protocolFeesNotRefunded = mockERC20.balanceOf(protocolFeeRecipient) -
             (order.takerAmount * protocolFeeBasisPoints) /
-            10_000;
+            (10_000 - protocolFeeBasisPoints);
         assertGt(protocolFeesNotRefunded, 0);
         assertEq(mockERC20.balanceOf(whiteKnight), order.takerAmount - protocolFeesNotRefunded);
         assertEq(mockCTF.balanceOf(address(predictDotLoan), _getPositionId(true)), proposal.collateralAmount);
@@ -164,7 +173,7 @@ contract PredictDotLoan_AcceptLoanOfferAndFillOrder_Test is TestHelpers {
     function testFuzz_acceptLoanOfferAndFillOrder_NegRisk(uint8 protocolFeeBasisPoints) public {
         _updateProtocolFeeRecipientAndBasisPoints(protocolFeeBasisPoints);
 
-        _mintNegRiskCTF(whiteKnight);
+        _mintNegRiskCTF(whiteKnight, COLLATERAL_AMOUNT);
 
         // mock CTF exchange does not check signature
         Order memory order = _createOrder(
@@ -176,7 +185,7 @@ contract PredictDotLoan_AcceptLoanOfferAndFillOrder_Test is TestHelpers {
         );
 
         IPredictDotLoan.Proposal memory proposal = _generateLoanOffer(IPredictDotLoan.QuestionType.NegRisk);
-        uint256 protocolFee = (order.takerAmount * protocolFeeBasisPoints) / 10_000;
+        uint256 protocolFee = (order.takerAmount * protocolFeeBasisPoints) / (10_000 - protocolFeeBasisPoints);
         proposal.loanAmount = order.takerAmount + protocolFee;
         proposal.signature = _signProposal(proposal);
 
@@ -197,7 +206,10 @@ contract PredictDotLoan_AcceptLoanOfferAndFillOrder_Test is TestHelpers {
         assertEq(mockERC20.balanceOf(address(predictDotLoan)), 0);
         assertEq(mockERC20.balanceOf(borrower), 0);
         assertEq(mockERC20.balanceOf(whiteKnight), order.takerAmount);
-        assertEq(mockERC20.balanceOf(protocolFeeRecipient), (order.takerAmount * protocolFeeBasisPoints) / 10_000);
+        assertEq(
+            mockERC20.balanceOf(protocolFeeRecipient),
+            (order.takerAmount * protocolFeeBasisPoints) / (10_000 - protocolFeeBasisPoints)
+        );
         assertEq(
             mockCTF.balanceOf(address(predictDotLoan), mockNegRiskAdapter.getPositionId(negRiskQuestionId, true)),
             proposal.collateralAmount
@@ -210,13 +222,13 @@ contract PredictDotLoan_AcceptLoanOfferAndFillOrder_Test is TestHelpers {
     function testFuzz_acceptLoanOfferAndFillOrder_ExcessCollateral(uint8 protocolFeeBasisPoints) public {
         _updateProtocolFeeRecipientAndBasisPoints(protocolFeeBasisPoints);
 
-        _mintCTF(whiteKnight);
+        _mintCTF(whiteKnight, COLLATERAL_AMOUNT);
 
         Order memory order = _createMockCTFSellOrder();
         order.makerAmount = order.makerAmount * 2;
 
         IPredictDotLoan.Proposal memory proposal = _generateLoanOffer(IPredictDotLoan.QuestionType.Binary);
-        uint256 protocolFee = (order.takerAmount * protocolFeeBasisPoints) / 10_000;
+        uint256 protocolFee = (order.takerAmount * protocolFeeBasisPoints) / (10_000 - protocolFeeBasisPoints);
         proposal.loanAmount = order.takerAmount + protocolFee;
         proposal.signature = _signProposal(proposal);
 
@@ -237,7 +249,10 @@ contract PredictDotLoan_AcceptLoanOfferAndFillOrder_Test is TestHelpers {
         assertEq(mockERC20.balanceOf(address(predictDotLoan)), 0);
         assertEq(mockERC20.balanceOf(borrower), 0);
         assertEq(mockERC20.balanceOf(whiteKnight), order.takerAmount);
-        assertEq(mockERC20.balanceOf(protocolFeeRecipient), (order.takerAmount * protocolFeeBasisPoints) / 10_000);
+        assertEq(
+            mockERC20.balanceOf(protocolFeeRecipient),
+            (order.takerAmount * protocolFeeBasisPoints) / (10_000 - protocolFeeBasisPoints)
+        );
         assertEq(mockCTF.balanceOf(address(predictDotLoan), _getPositionId(true)), proposal.collateralAmount);
         assertEq(mockCTF.balanceOf(borrower, _getPositionId(true)), proposal.collateralAmount);
         _assertLoanOfferFulfillmentData(proposal);
@@ -245,11 +260,32 @@ contract PredictDotLoan_AcceptLoanOfferAndFillOrder_Test is TestHelpers {
         _assertLoanCreated_OrderFilled(proposal.loanAmount);
     }
 
+    function testFuzz_acceptLoanOfferAndFillOrder_RevertIf_SellerMustBeThirdParty_LenderIsSeller() public {
+        (IPredictDotLoan.Proposal memory proposal, Order memory order) = _generateOrderAndProposal();
+        order.maker = proposal.from;
+
+        vm.expectRevert(IPredictDotLoan.SellerMustBeThirdParty.selector);
+        vm.prank(borrower);
+        predictDotLoan.acceptLoanOfferAndFillOrder(order, proposal);
+    }
+
+    function testFuzz_acceptLoanOfferAndFillOrder_RevertIf_SellerMustBeThirdParty_BorrowerIsSeller() public {
+        (IPredictDotLoan.Proposal memory proposal, Order memory order) = _generateOrderAndProposal();
+
+        vm.expectRevert(IPredictDotLoan.SellerMustBeThirdParty.selector);
+        vm.prank(order.maker);
+        predictDotLoan.acceptLoanOfferAndFillOrder(order, proposal);
+    }
+
     function testFuzz_acceptLoanOfferAndFillOrder_RevertIf_ProtocolFeeBasisPointsMismatch(
         uint8 protocolFeeBasisPoints
     ) public {
         vm.assume(protocolFeeBasisPoints != _getProtocolFeeBasisPoints());
         (IPredictDotLoan.Proposal memory proposal, Order memory order) = _generateOrderAndProposal();
+        proposal.loanAmount =
+            order.takerAmount +
+            (order.takerAmount * protocolFeeBasisPoints) /
+            (10_000 - protocolFeeBasisPoints);
         proposal.protocolFeeBasisPoints = protocolFeeBasisPoints;
         proposal.signature = _signProposal(proposal);
 
@@ -507,6 +543,16 @@ contract PredictDotLoan_AcceptLoanOfferAndFillOrder_Test is TestHelpers {
         _assertLoanCreated_PartialFulfillmentSecondLeg();
 
         _assertLoanOfferFulfillmentData(proposal);
+    }
+
+    function test_acceptLoanOfferAndFillOrder_RevertIf_FulfillAmountTooLow_Zero() public {
+        (IPredictDotLoan.Proposal memory proposal, Order memory order) = _generateOrderAndProposal();
+
+        order.takerAmount = 0;
+
+        vm.expectRevert(IPredictDotLoan.FulfillAmountTooLow.selector);
+        vm.prank(borrower);
+        predictDotLoan.acceptLoanOfferAndFillOrder(order, proposal);
     }
 
     function testFuzz_acceptLoanOfferAndFillOrder_PartialFulfillment_RevertIf_FulfillAmountTooLow(

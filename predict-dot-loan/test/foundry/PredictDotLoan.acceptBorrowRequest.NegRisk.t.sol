@@ -12,10 +12,21 @@ contract PredictDotLoan_AcceptBorrowRequest_NegRisk_Test is PredictDotLoan_Test 
         IPredictDotLoan.Proposal memory proposal = _generateBorrowRequest(IPredictDotLoan.QuestionType.NegRisk);
         proposal.signature = _signProposal(proposal, borrowerPrivateKey);
 
-        mockNegRiskAdapter.setDetermined(negRiskQuestionId, true);
+        mockNegRiskAdapter.setDetermined(_getNegRiskMarketId(), true);
 
         vm.prank(lender);
         vm.expectRevert(IPredictDotLoan.MarketResolved.selector);
+        predictDotLoan.acceptBorrowRequest(proposal, proposal.loanAmount);
+    }
+
+    function test_acceptBorrowRequest_NegRisk_RevertIf_NoQuestionIdForOracleRequestId() public {
+        IPredictDotLoan.Proposal memory proposal = _generateBorrowRequest(IPredictDotLoan.QuestionType.NegRisk);
+        proposal.signature = _signProposal(proposal, borrowerPrivateKey);
+
+        mockNegRiskOperator.setQuestionId(negRiskQuestionId, bytes32(0));
+
+        vm.prank(lender);
+        vm.expectRevert(IPredictDotLoan.NoQuestionIdForOracleRequestId.selector);
         predictDotLoan.acceptBorrowRequest(proposal, proposal.loanAmount);
     }
 }

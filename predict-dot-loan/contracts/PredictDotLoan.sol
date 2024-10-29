@@ -18,8 +18,7 @@ import {IPredictDotLoan} from "./interfaces/IPredictDotLoan.sol";
 import {ICTFExchange, Order, Side} from "./interfaces/ICTFExchange.sol";
 import {IUmaCtfAdapter} from "./interfaces/IUmaCtfAdapter.sol";
 import {INegRiskAdapter} from "./interfaces/INegRiskAdapter.sol";
-
-import {console2} from "forge-std/console2.sol";
+import {INegRiskOperator} from "./interfaces/INegRiskOperator.sol";
 
 /**
  * @title PredictDotLoan
@@ -35,6 +34,11 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
      * @notice Refinancers are allowed to refinance loans on behalf of borrowers.
      */
     bytes32 private constant REFINANCIER_ROLE = keccak256("REFINANCIER_ROLE");
+
+    /**
+     * @notice Proposals matcher is allowed to match proposals.
+     */
+    bytes32 private constant PROPOSALS_MATCHER_ROLE = keccak256("PROPOSALS_MATCHER_ROLE");
 
     /**
      * @notice Max interest rate per second is 10,000% APY
@@ -85,6 +89,11 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
      * @notice Neg risk adapter
      */
     INegRiskAdapter private immutable NEG_RISK_ADAPTER;
+
+    /**
+     * @notice Neg risk operator
+     */
+    INegRiskOperator public immutable NEG_RISK_OPERATOR;
 
     /**
      * @notice Proposals can be partially fulfilled. This mapping keeps track of the proposal's fulfilled amount.
@@ -155,6 +164,7 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
      * @param _negRiskCtfExchange predict.fun neg risk CTF exchange
      * @param _umaCtfAdapter Binary outcome UMA CTF adapter
      * @param _negRiskUmaCtfAdapter Neg risk UMA CTF adapter
+     * @param _negRiskOperator Neg risk operator
      */
     constructor(
         address _owner,
@@ -162,7 +172,8 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
         address _ctfExchange,
         address _negRiskCtfExchange,
         address _umaCtfAdapter,
-        address _negRiskUmaCtfAdapter
+        address _negRiskUmaCtfAdapter,
+        address _negRiskOperator
     ) EIP712("predict.loan", "1") {
         CTF_EXCHANGE = ICTFExchange(_ctfExchange);
         NEG_RISK_CTF_EXCHANGE = ICTFExchange(_negRiskCtfExchange);
@@ -179,6 +190,11 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
         CTF = IConditionalTokens(CTF_EXCHANGE.getCtf());
         if (NEG_RISK_ADAPTER.ctf() != address(CTF)) {
             revert OnlyOneCTFAllowed();
+        }
+
+        NEG_RISK_OPERATOR = INegRiskOperator(_negRiskOperator);
+        if (address(NEG_RISK_OPERATOR.nrAdapter()) != address(NEG_RISK_ADAPTER)) {
+            revert InvalidNegRiskOperator();
         }
 
         _grantRole(DEFAULT_ADMIN_ROLE, _owner);
@@ -222,6 +238,10 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
             revert PositionIdMismatch();
         }
 
+        if (exchangeOrder.maker == proposal.from || exchangeOrder.maker == msg.sender) {
+            revert SellerMustBeThirdParty();
+        }
+
         if (exchangeOrder.side != Side.SELL) {
             revert NotSellOrder();
         }
@@ -231,7 +251,8 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
         }
 
         bytes32 proposalId = hashProposal(proposal);
-        uint256 protocolFee = (exchangeOrder.takerAmount * protocolFeeBasisPoints) / 10_000;
+        uint256 protocolFee = (exchangeOrder.takerAmount * proposal.protocolFeeBasisPoints) /
+            (10_000 - proposal.protocolFeeBasisPoints);
         uint256 fulfillAmount = exchangeOrder.takerAmount + protocolFee;
         _assertProposalValidity(proposalId, proposal, positionId, fulfillAmount);
 
@@ -279,12 +300,12 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
                     Side.SELL
                 );
 
-                LOAN_TOKEN.safeTransfer(exchangeOrder.maker, refund);
+                _transferLoanToken(exchangeOrder.maker, refund);
             }
 
             uint256 protocolFeesNotRefunded = LOAN_TOKEN.balanceOf(address(this));
             if (protocolFeesNotRefunded > 0) {
-                LOAN_TOKEN.safeTransfer(protocolFeeRecipient, protocolFeesNotRefunded);
+                _transferLoanToken(protocolFeeRecipient, protocolFeesNotRefunded);
             }
         }
 
@@ -325,6 +346,10 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
         _assertProposalIsLoanOffer(loanOffer);
 
         _assertLenderIsNotBorrower(loanOffer.from, borrowRequest.from);
+
+        if (msg.sender != loanOffer.from && msg.sender != borrowRequest.from) {
+            _checkRole(PROPOSALS_MATCHER_ROLE);
+        }
 
         uint256 positionId = _derivePositionId(borrowRequest);
         // This also indirectly checks that the questionType is the same
@@ -398,9 +423,13 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
                 fulfillAmount
             );
 
+            // Even though the actual collateral amount required is calculated based on the loan offer,
+            // the borrow request's fulfillment is updated with the collateral amount required
+            // based on the borrow request to prevent the last loan to have a wildly different
+            // collateral ratio
             _updateFulfillment(
                 borrowRequestFulfillment,
-                collateralAmountRequired,
+                _calculateCollateralAmountRequired(borrowRequest, borrowRequestFulfillment, fulfillAmount),
                 fulfillAmount,
                 borrowRequestProposalId
             );
@@ -418,7 +447,7 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
 
         uint256 protocolFee = _transferLoanAmountAndProtocolFee(loanOffer.from, borrowRequest.from, fulfillAmount);
 
-        CTF.safeTransferFrom(borrowRequest.from, address(this), positionId, collateralAmountRequired, "");
+        _transferCollateralToken(borrowRequest.from, address(this), positionId, collateralAmountRequired);
 
         uint256 _nextLoanId = nextLoanId;
         _createLoan(
@@ -451,7 +480,7 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
     /**
      * @inheritdoc IPredictDotLoan
      */
-    function repay(uint256 loanId) external nonReentrant {
+    function repay(uint256 loanId, uint256 maxRepaymentAmount) external nonReentrant {
         Loan storage loan = loans[loanId];
 
         _assertAuthorizedCaller(loan.borrower);
@@ -463,12 +492,20 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
             }
         }
 
+        if (loan.startTime == block.timestamp) {
+            revert LoanCannotBeRepaidInstantly();
+        }
+
         uint256 debt = _calculateDebt(loan.loanAmount, loan.interestRatePerSecond, _calculateLoanTimeElapsed(loan));
+
+        if (maxRepaymentAmount < debt) {
+            revert MaxRepaymentAmountExceeded();
+        }
 
         loan.status = LoanStatus.Repaid;
 
-        LOAN_TOKEN.safeTransferFrom(msg.sender, loan.lender, debt);
-        CTF.safeTransferFrom(address(this), msg.sender, loan.positionId, loan.collateralAmount, "");
+        _transferLoanTokenFrom(msg.sender, loan.lender, debt);
+        _transferCollateralToken(address(this), msg.sender, loan.positionId, loan.collateralAmount);
 
         emit LoanRepaid(loanId, debt);
     }
@@ -541,7 +578,11 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
             revert LoanNotMatured();
         }
 
-        if (_isQuestionPriceAvailable(loan.questionType, positionQuestion[loan.positionId])) {
+        if (
+            _isQuestionPriceAvailable(loan.questionType, positionQuestion[loan.positionId]) ||
+            _calculateDebt(loan.loanAmount, loan.interestRatePerSecond, _calculateLoanTimeElapsed(loan)) >
+            loan.collateralAmount
+        ) {
             _seize(loanId, loan);
         } else {
             loan.status = LoanStatus.Called;
@@ -558,7 +599,7 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
      *      taking a risk on a borrower who has a history of not repaying. The new lender is free to
      *      trigger an auction any time.
      */
-    function auction(uint256 loanId) external nonReentrant whenNotPaused {
+    function auction(uint256 loanId, uint256 maxInterestRatePerSecond) external nonReentrant whenNotPaused {
         Loan storage loan = loans[loanId];
 
         _assertLoanStatus(loan.status, LoanStatus.Called);
@@ -572,24 +613,34 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
 
         _assertAuctionIsActive(timeElapsed);
 
+        uint256 positionId = loan.positionId;
+
         // If the question is resolved in the middle of the auction, the lender can wait for the auction to be over
         // and seize the collateral
-        _assertQuestionPriceUnavailable(loan.questionType, positionQuestion[loan.positionId]);
+        _assertQuestionPriceUnavailable(loan.questionType, positionQuestion[positionId]);
 
         uint256 interestRatePerSecond = _auctionCurrentInterestRatePerSecond(timeElapsed);
+
+        if (interestRatePerSecond > maxInterestRatePerSecond) {
+            revert InterestRatePerSecondTooHigh();
+        }
 
         loan.status = LoanStatus.Auctioned;
 
         uint256 _nextLoanId = nextLoanId;
         uint256 debt = _calculateDebt(loan.loanAmount, loan.interestRatePerSecond, callTime - loan.startTime);
-        uint256 protocolFee = (debt * protocolFeeBasisPoints) / 10_000;
+        uint256 protocolFee = (debt * protocolFeeBasisPoints) / (10_000 - protocolFeeBasisPoints);
+        uint256 loanAmount = debt + protocolFee;
+        uint256 collateralAmount = loan.collateralAmount;
+
+        _assertCollateralizationRatioAtLeastOneHundredPercent(collateralAmount, loanAmount);
 
         Loan storage newLoan = loans[_nextLoanId];
         newLoan.borrower = loan.borrower;
         newLoan.lender = msg.sender;
-        newLoan.positionId = loan.positionId;
-        newLoan.collateralAmount = loan.collateralAmount;
-        newLoan.loanAmount = debt + protocolFee;
+        newLoan.positionId = positionId;
+        newLoan.collateralAmount = collateralAmount;
+        newLoan.loanAmount = loanAmount;
         newLoan.interestRatePerSecond = interestRatePerSecond;
         newLoan.startTime = block.timestamp;
         newLoan.status = LoanStatus.Active;
@@ -690,7 +741,7 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
     /**
      * @inheritdoc IPredictDotLoan
      */
-    function toggleAutoRefinancingEnabled() external {
+    function toggleAutoRefinancingEnabled() external nonReentrant {
         uint256 preference = autoRefinancingEnabled[msg.sender] == 0 ? 1 : 0;
         autoRefinancingEnabled[msg.sender] = preference;
         emit AutoRefinancingEnabledToggled(msg.sender, preference);
@@ -814,7 +865,21 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
             keccak256(
                 abi.encode(
                     keccak256(
-                        "Proposal(address from,uint256 loanAmount,uint256 collateralAmount,uint8 questionType,uint256 questionId,bool outcome,uint256 interestRatePerSecond,uint256 duration,uint256 validUntil,uint256 salt,uint256 nonce,uint8 proposalType,uint256 protocolFeeBasisPoints)"
+                        "Proposal("
+                        "address from,"
+                        "uint256 loanAmount,"
+                        "uint256 collateralAmount,"
+                        "uint8 questionType,"
+                        "bytes32 questionId,"
+                        "bool outcome,"
+                        "uint256 interestRatePerSecond,"
+                        "uint256 duration,"
+                        "uint256 validUntil,"
+                        "uint256 salt,"
+                        "uint256 nonce,"
+                        "uint8 proposalType,"
+                        "uint256 protocolFeeBasisPoints"
+                        ")"
                     ),
                     proposal.from,
                     proposal.loanAmount,
@@ -877,7 +942,7 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
     function _seize(uint256 loanId, Loan storage loan) private {
         loan.status = LoanStatus.Defaulted;
 
-        CTF.safeTransferFrom(address(this), msg.sender, loan.positionId, loan.collateralAmount, "");
+        _transferCollateralToken(address(this), msg.sender, loan.positionId, loan.collateralAmount);
 
         emit LoanDefaulted(loanId);
     }
@@ -892,9 +957,9 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
         uint256 loanAmount
     ) private returns (uint256 protocolFee) {
         protocolFee = (loanAmount * protocolFeeBasisPoints) / 10_000;
-        LOAN_TOKEN.safeTransferFrom(from, to, loanAmount - protocolFee);
+        _transferLoanTokenFrom(from, to, loanAmount - protocolFee);
         if (protocolFee > 0) {
-            LOAN_TOKEN.safeTransferFrom(from, protocolFeeRecipient, protocolFee);
+            _transferLoanTokenFrom(from, protocolFeeRecipient, protocolFee);
         }
     }
 
@@ -909,9 +974,9 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
         uint256 loanAmount,
         uint256 protocolFee
     ) private {
-        LOAN_TOKEN.safeTransferFrom(from, to, loanAmount);
+        _transferLoanTokenFrom(from, to, loanAmount);
         if (protocolFee > 0) {
-            LOAN_TOKEN.safeTransferFrom(from, protocolFeeRecipient, protocolFee);
+            _transferLoanTokenFrom(from, protocolFeeRecipient, protocolFee);
         }
     }
 
@@ -924,8 +989,20 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
         uint256 excessCollateral = actualCollateralAmount - collateralAmountRequired;
 
         if (excessCollateral > 0) {
-            CTF.safeTransferFrom(address(this), receiver, positionId, excessCollateral, "");
+            _transferCollateralToken(address(this), receiver, positionId, excessCollateral);
         }
+    }
+
+    function _transferCollateralToken(address from, address to, uint256 positionId, uint256 amount) private {
+        CTF.safeTransferFrom(from, to, positionId, amount, "");
+    }
+
+    function _transferLoanToken(address to, uint256 amount) private {
+        LOAN_TOKEN.safeTransfer(to, amount);
+    }
+
+    function _transferLoanTokenFrom(address from, address to, uint256 amount) private {
+        LOAN_TOKEN.safeTransferFrom(from, to, amount);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -984,11 +1061,12 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
 
         _updateFulfillment(fulfillment, collateralAmountRequired, fulfillAmount, proposalId);
 
-        address lender = proposal.proposalType == ProposalType.LoanOffer ? proposal.from : msg.sender;
-        address borrower = lender == msg.sender ? proposal.from : msg.sender;
+        address from = proposal.from;
+        address lender = proposal.proposalType == ProposalType.LoanOffer ? from : msg.sender;
+        address borrower = lender == msg.sender ? from : msg.sender;
 
         uint256 protocolFee = _transferLoanAmountAndProtocolFee(lender, borrower, fulfillAmount);
-        CTF.safeTransferFrom(borrower, address(this), positionId, collateralAmountRequired, "");
+        _transferCollateralToken(borrower, address(this), positionId, collateralAmountRequired);
 
         _createLoan(nextLoanId, proposal, positionId, lender, borrower, collateralAmountRequired, fulfillAmount);
 
@@ -1057,9 +1135,10 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
         _assertLoanStatus(loan.status, LoanStatus.Active);
 
         address borrower = loan.borrower;
-        _assertLenderIsNotBorrower(borrower, proposal.from);
+        address lender = proposal.from;
+        _assertLenderIsNotBorrower(borrower, lender);
 
-        _assertNewLenderIsNotTheSameAsOldLender(proposal.from, loan.lender);
+        _assertNewLenderIsNotTheSameAsOldLender(lender, loan.lender);
 
         _assertNotExpired(proposal.validUntil);
 
@@ -1085,20 +1164,20 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
         }
 
         bytes32 proposalId = hashProposal(proposal);
-        _assertValidSignature(proposalId, proposal.from, proposal.signature);
+        _assertValidSignature(proposalId, lender, proposal.signature);
 
         Fulfillment storage fulfillment = _getFulfillment(proposal);
 
         uint256 debt = _calculateDebt(loan.loanAmount, loan.interestRatePerSecond, block.timestamp - loan.startTime);
-        protocolFee = (debt * protocolFeeBasisPoints) / 10_000;
+        protocolFee = (debt * proposal.protocolFeeBasisPoints) / (10_000 - proposal.protocolFeeBasisPoints);
         uint256 fulfillAmount = debt + protocolFee;
         _assertFulfillAmountNotTooLow(fulfillAmount, fulfillment.loanAmount, proposal.loanAmount);
 
-        _assertProposalNotCancelled(proposal.from, proposal.salt, proposal.proposalType);
+        _assertProposalNotCancelled(lender, proposal.salt, proposal.proposalType);
 
         _assertSaltNotUsedByAnotherProposal(fulfillment.proposalId, proposalId);
 
-        _assertProposalNonceIsCurrent(proposal.proposalType, proposal.from, proposal.nonce);
+        _assertProposalNonceIsCurrent(proposal.proposalType, lender, proposal.nonce);
 
         _assertFulfillAmountNotTooHigh(fulfillAmount, fulfillment.loanAmount, proposal.loanAmount);
 
@@ -1114,7 +1193,7 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
 
         _updateFulfillment(fulfillment, collateralAmountRequired, fulfillAmount, proposalId);
 
-        _transferLoanAmountAndProtocolFeeWithoutDeductingFromLoanAmount(proposal.from, loan.lender, debt, protocolFee);
+        _transferLoanAmountAndProtocolFeeWithoutDeductingFromLoanAmount(lender, loan.lender, debt, protocolFee);
 
         _transferExcessCollateralIfAny(positionId, borrower, collateralAmountRequired, loan.collateralAmount);
 
@@ -1271,6 +1350,10 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
         uint256 fulfilledAmount,
         uint256 loanAmount
     ) private pure {
+        if (fulfillAmount == 0) {
+            revert FulfillAmountTooLow();
+        }
+
         if (fulfillAmount != loanAmount - fulfilledAmount) {
             if (fulfillAmount < loanAmount / 10) {
                 revert FulfillAmountTooLow();
@@ -1320,17 +1403,7 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
      * @param questionType The question type provided by the user
      */
     function _assertPositionTradeableOnExchange(uint256 positionId, QuestionType questionType) private view {
-        _assertPositionTradeableOnExchange(_selectExchangeForQuestionType(questionType), positionId);
-    }
-
-    /**
-     * @dev Helper function for _assertPositionTradeableOnExchange(uint256,QuestionType)
-     *
-     * @param exchange CTF_EXCHANGE or NEG_RISK_CTF_EXCHANGE
-     * @param positionId The position ID derived from the user's question ID and outcome
-     */
-    function _assertPositionTradeableOnExchange(ICTFExchange exchange, uint256 positionId) private view {
-        (uint256 complement, ) = exchange.registry(positionId);
+        (uint256 complement, ) = _selectExchangeForQuestionType(questionType).registry(positionId);
         if (complement == 0) {
             revert PositionIdNotTradeableOnExchange();
         }
@@ -1455,7 +1528,7 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
         if (isAvailable) {
             revert QuestionResolved();
         } else if (umaError != 0x579a4801) {
-            // Loans should still be blocked if the error is NotInitialized, Flagged or Paused
+            // Loans should still be blocked if the error is NotInitialized, Flagged, Paused or InvalidOOPrice
             // Reference: https://github.com/Polymarket/uma-ctf-adapter/blob/main/src/UmaCtfAdapter.sol#L145
             revert AbnormalQuestionState();
         }
@@ -1477,7 +1550,18 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
         }
     }
 
-    function _isNegRiskMarketDetermined(bytes32 questionId) private view returns (bool isDetermined) {
+    /**
+     * @dev Neg risk adapter does not use the UMA question ID to determine if the market is resolved.
+     *      If uses the market ID which is derived from a different question ID. This question ID has
+     *      its last 8 bit masked and replaced with the question's index under the market.
+     *
+     * @param oracleRequestId The oracle request ID is the neg risk question ID
+     */
+    function _isNegRiskMarketDetermined(bytes32 oracleRequestId) private view returns (bool isDetermined) {
+        bytes32 questionId = NEG_RISK_OPERATOR.questionIds(oracleRequestId);
+        if (questionId == bytes32(0)) {
+            revert NoQuestionIdForOracleRequestId();
+        }
         isDetermined = NEG_RISK_ADAPTER.getDetermined(NegRiskIdLib.getMarketId(questionId));
     }
 
@@ -1493,6 +1577,14 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
         }
     }
 
+    /**
+     * @dev The price availability check for neg risk questions here is different from _assertQuestionPriceUnavailable.
+     *      Here we only check the market is determined and we don't check if the price is available on UMA CTF adapter.
+     *      We should keep the UMA price check for _assertQuestionPriceUnavailable to block loans from being created if
+     *      the question is resolved on UMA CTF adapter (even if it's not final). We don't do the check here to make sure
+     *      the lenders cannot seize the collateral until the market's resolution is finalized. Not even the contract owner
+     *      can modify the result by calling NegRiskOperator.resolveQuestion.
+     */
     function _isQuestionPriceAvailable(
         QuestionType questionType,
         bytes32 questionId
@@ -1500,8 +1592,7 @@ contract PredictDotLoan is AccessControl, EIP712, ERC1155Holder, IPredictDotLoan
         if (questionType == QuestionType.Binary) {
             (isAvailable, ) = _isBinaryOutcomeQuestionPriceAvailable(UMA_CTF_ADAPTER, questionId);
         } else {
-            (isAvailable, ) = _isBinaryOutcomeQuestionPriceAvailable(NEG_RISK_UMA_CTF_ADAPTER, questionId);
-            isAvailable = isAvailable || _isNegRiskMarketDetermined(questionId);
+            isAvailable = _isNegRiskMarketDetermined(questionId);
         }
     }
 

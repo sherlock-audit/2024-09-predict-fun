@@ -13,7 +13,7 @@ contract PredictDotLoan_Refinance_Bot_Test is PredictDotLoan_Test {
     function testFuzz_refinance_CollateralAmountRequiredIsTheSame(uint8 protocolFeeBasisPoints) public {
         // Only need to mint for one loan as setUp already mints for one loan
         mockERC20.mint(lender, LOAN_AMOUNT);
-        _mintCTF(borrower);
+        _mintCTF(borrower, COLLATERAL_AMOUNT);
 
         vm.prank(borrower);
         predictDotLoan.toggleAutoRefinancingEnabled();
@@ -43,7 +43,7 @@ contract PredictDotLoan_Refinance_Bot_Test is PredictDotLoan_Test {
         proposal4.loanAmount =
             EXPECTED_DEBT_AFTER_12_HOURS +
             (EXPECTED_DEBT_AFTER_12_HOURS * protocolFeeBasisPoints) /
-            10_000;
+            (10_000 - protocolFeeBasisPoints);
         proposal4.duration = LOAN_DURATION * 3;
 
         proposal3.signature = _signProposal(proposal3, lender2PrivateKey);
@@ -69,7 +69,7 @@ contract PredictDotLoan_Refinance_Bot_Test is PredictDotLoan_Test {
                 proposal3.loanAmount,
                 proposal3.interestRatePerSecond,
                 proposal3.duration,
-                (EXPECTED_DEBT_AFTER_12_HOURS * protocolFeeBasisPoints) / 10_000
+                (EXPECTED_DEBT_AFTER_12_HOURS * protocolFeeBasisPoints) / (10_000 - protocolFeeBasisPoints)
             );
             results[1] = IPredictDotLoan.RefinancingResult(
                 predictDotLoan.hashProposal(proposal4),
@@ -80,7 +80,7 @@ contract PredictDotLoan_Refinance_Bot_Test is PredictDotLoan_Test {
                 proposal4.loanAmount,
                 proposal4.interestRatePerSecond,
                 proposal4.duration,
-                (EXPECTED_DEBT_AFTER_12_HOURS * protocolFeeBasisPoints) / 10_000
+                (EXPECTED_DEBT_AFTER_12_HOURS * protocolFeeBasisPoints) / (10_000 - protocolFeeBasisPoints)
             );
 
             expectEmitCheckAll();
@@ -153,7 +153,7 @@ contract PredictDotLoan_Refinance_Bot_Test is PredictDotLoan_Test {
         assertApproxEqAbs(mockERC20.balanceOf(lender), EXPECTED_DEBT_AFTER_12_HOURS * 2, 1);
         assertApproxEqAbs(
             mockERC20.balanceOf(protocolFeeRecipient),
-            (EXPECTED_DEBT_AFTER_12_HOURS * 2 * protocolFeeBasisPoints) / 10_000,
+            (EXPECTED_DEBT_AFTER_12_HOURS * 2 * protocolFeeBasisPoints) / (10_000 - protocolFeeBasisPoints),
             1
         );
         assertEq(mockCTF.balanceOf(address(predictDotLoan), _getPositionId(true)), COLLATERAL_AMOUNT * 2);
@@ -165,7 +165,7 @@ contract PredictDotLoan_Refinance_Bot_Test is PredictDotLoan_Test {
     function testFuzz_refinance_CollateralAmountRequiredIsLessThanOutstandingLoan(uint8 protocolFeeBasisPoints) public {
         // Only need to mint for one loan as setUp already mints for one loan
         mockERC20.mint(lender, LOAN_AMOUNT);
-        _mintCTF(borrower);
+        _mintCTF(borrower, COLLATERAL_AMOUNT);
 
         vm.prank(borrower);
         predictDotLoan.toggleAutoRefinancingEnabled();
@@ -190,7 +190,7 @@ contract PredictDotLoan_Refinance_Bot_Test is PredictDotLoan_Test {
         proposal3.loanAmount =
             predictDotLoan.calculateDebt(1) +
             (predictDotLoan.calculateDebt(1) * _getProtocolFeeBasisPoints()) /
-            10_000 +
+            (10_000 - protocolFeeBasisPoints) +
             100 ether;
         proposal3.duration = LOAN_DURATION * 2;
 
@@ -201,7 +201,7 @@ contract PredictDotLoan_Refinance_Bot_Test is PredictDotLoan_Test {
         proposal4.loanAmount =
             predictDotLoan.calculateDebt(2) +
             (predictDotLoan.calculateDebt(2) * _getProtocolFeeBasisPoints()) /
-            10_000 +
+            (10_000 - protocolFeeBasisPoints) +
             100 ether;
         proposal4.duration = LOAN_DURATION * 3;
 
@@ -228,7 +228,7 @@ contract PredictDotLoan_Refinance_Bot_Test is PredictDotLoan_Test {
                 proposal3.loanAmount - 100 ether,
                 proposal3.interestRatePerSecond,
                 proposal3.duration,
-                (EXPECTED_DEBT_AFTER_12_HOURS * protocolFeeBasisPoints) / 10_000
+                (EXPECTED_DEBT_AFTER_12_HOURS * protocolFeeBasisPoints) / (10_000 - protocolFeeBasisPoints)
             );
             results[1] = IPredictDotLoan.RefinancingResult(
                 predictDotLoan.hashProposal(proposal4),
@@ -239,7 +239,7 @@ contract PredictDotLoan_Refinance_Bot_Test is PredictDotLoan_Test {
                 proposal4.loanAmount - 100 ether,
                 proposal4.interestRatePerSecond,
                 proposal4.duration,
-                (EXPECTED_DEBT_AFTER_12_HOURS * protocolFeeBasisPoints) / 10_000
+                (EXPECTED_DEBT_AFTER_12_HOURS * protocolFeeBasisPoints) / (10_000 - protocolFeeBasisPoints)
             );
 
             expectEmitCheckAll();
@@ -315,13 +315,13 @@ contract PredictDotLoan_Refinance_Bot_Test is PredictDotLoan_Test {
                 proposal4.loanAmount -
                 EXPECTED_DEBT_AFTER_12_HOURS *
                 2 -
-                ((EXPECTED_DEBT_AFTER_12_HOURS * 2 * protocolFeeBasisPoints) / 10_000),
+                ((EXPECTED_DEBT_AFTER_12_HOURS * 2 * protocolFeeBasisPoints) / (10_000 - protocolFeeBasisPoints)),
             1
         );
         assertApproxEqAbs(mockERC20.balanceOf(lender), EXPECTED_DEBT_AFTER_12_HOURS * 2, 1);
         assertApproxEqAbs(
             mockERC20.balanceOf(protocolFeeRecipient),
-            ((EXPECTED_DEBT_AFTER_12_HOURS * 2) * protocolFeeBasisPoints) / 10_000,
+            ((EXPECTED_DEBT_AFTER_12_HOURS * 2) * protocolFeeBasisPoints) / (10_000 - protocolFeeBasisPoints),
             1
         );
         assertEq(
@@ -728,7 +728,7 @@ contract PredictDotLoan_Refinance_Bot_Test is PredictDotLoan_Test {
         proposalTwo.signature = _signProposal(proposalTwo, lender2PrivateKey);
 
         mockERC20.mint(lender2, proposal.loanAmount);
-        _mintCTF(borrower);
+        _mintCTF(borrower, COLLATERAL_AMOUNT);
 
         vm.prank(lender2);
         mockERC20.approve(address(predictDotLoan), proposal.loanAmount);
