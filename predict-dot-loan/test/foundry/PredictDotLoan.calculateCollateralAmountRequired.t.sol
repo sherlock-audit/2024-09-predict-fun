@@ -73,6 +73,12 @@ contract PredictDotLoan_CalculateCollateralAmountRequired_Test is PredictDotLoan
         assertEq(collateralRequired, expectedCollateral, "Collateral amount mismatch for final fulfillment");
     }
 
+    function test_calculateCollateralAmountRequired_RevertIf_FulfillAmountTooLow_Zero() public {
+        IPredictDotLoan.Proposal memory proposal = _generateLoanOffer(IPredictDotLoan.QuestionType.Binary);
+        vm.expectRevert(IPredictDotLoan.FulfillAmountTooLow.selector);
+        predictDotLoan.calculateCollateralAmountRequired(proposal, 0);
+    }
+
     function test_calculateCollateralAmountRequired_RevertIf_FulfillAmountTooLow() public {
         IPredictDotLoan.Proposal memory proposal = _generateLoanOffer(IPredictDotLoan.QuestionType.Binary);
         uint256 fulfillAmount = proposal.loanAmount / 10 - 1;

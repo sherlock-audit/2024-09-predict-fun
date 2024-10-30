@@ -29,7 +29,7 @@ contract PredictDotLoan_Call_Test is PredictDotLoan_Test {
 
         vm.expectRevert(IPredictDotLoan.InvalidLoanStatus.selector);
         vm.prank(lender2);
-        predictDotLoan.auction(1);
+        predictDotLoan.auction(1, 1 ether + 1);
 
         vm.expectRevert(IPredictDotLoan.InvalidLoanStatus.selector);
         vm.prank(lender);
@@ -41,7 +41,7 @@ contract PredictDotLoan_Call_Test is PredictDotLoan_Test {
 
         vm.warp(vm.getBlockTimestamp() + LOAN_DURATION);
 
-        mockNegRiskAdapter.setDetermined(negRiskQuestionId, true);
+        mockNegRiskAdapter.setDetermined(_getNegRiskMarketId(), true);
 
         expectEmitCheckAll();
         emit LoanDefaulted(1);
@@ -63,7 +63,7 @@ contract PredictDotLoan_Call_Test is PredictDotLoan_Test {
 
         vm.expectRevert(IPredictDotLoan.InvalidLoanStatus.selector);
         vm.prank(lender2);
-        predictDotLoan.auction(1);
+        predictDotLoan.auction(1, 1 ether + 1);
 
         vm.expectRevert(IPredictDotLoan.InvalidLoanStatus.selector);
         vm.prank(lender);
@@ -78,7 +78,34 @@ contract PredictDotLoan_Call_Test is PredictDotLoan_Test {
         mockNegRiskUmaCtfAdapter.setPayoutStatus(negRiskQuestionId, MockUmaCtfAdapter.PayoutStatus.HasPrice);
 
         expectEmitCheckAll();
-        emit LoanDefaulted(1);
+        emit LoanCalled(1);
+
+        vm.prank(lender);
+        predictDotLoan.call(1);
+
+        IPredictDotLoan.LoanStatus status = _getLoanStatus(1);
+        assertEq(uint8(status), uint8(IPredictDotLoan.LoanStatus.Called));
+
+        assertEq(
+            mockCTF.balanceOf(address(predictDotLoan), mockNegRiskAdapter.getPositionId(negRiskQuestionId, true)),
+            COLLATERAL_AMOUNT
+        );
+        assertEq(mockCTF.balanceOf(lender, mockNegRiskAdapter.getPositionId(negRiskQuestionId, true)), 0);
+    }
+
+    function testFuzz_call_CollateralizationRatioTooLow(uint24 callTime) public {
+        IPredictDotLoan.Proposal memory proposal = _generateLoanOffer(IPredictDotLoan.QuestionType.Binary);
+        proposal.interestRatePerSecond = ONE + TEN_THOUSAND_APY;
+        proposal.signature = _signProposal(proposal);
+
+        vm.prank(borrower);
+        predictDotLoan.acceptLoanOffer(proposal, proposal.loanAmount);
+
+        vm.warp(vm.getBlockTimestamp() + callTime);
+
+        uint256 debt = predictDotLoan.calculateDebt(1);
+
+        vm.assume(debt > COLLATERAL_AMOUNT);
 
         vm.prank(lender);
         predictDotLoan.call(1);
@@ -86,14 +113,8 @@ contract PredictDotLoan_Call_Test is PredictDotLoan_Test {
         IPredictDotLoan.LoanStatus status = _getLoanStatus(1);
         assertEq(uint8(status), uint8(IPredictDotLoan.LoanStatus.Defaulted));
 
-        assertEq(
-            mockCTF.balanceOf(address(predictDotLoan), mockNegRiskAdapter.getPositionId(negRiskQuestionId, true)),
-            0
-        );
-        assertEq(
-            mockCTF.balanceOf(lender, mockNegRiskAdapter.getPositionId(negRiskQuestionId, true)),
-            COLLATERAL_AMOUNT
-        );
+        assertEq(mockCTF.balanceOf(address(predictDotLoan), _getPositionId(true)), 0);
+        assertEq(mockCTF.balanceOf(lender, _getPositionId(true)), COLLATERAL_AMOUNT);
     }
 
     function test_call_RevertIf_UnauthorizedCaller() public {

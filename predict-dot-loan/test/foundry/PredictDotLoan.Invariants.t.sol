@@ -14,13 +14,14 @@ import {InvariantTestHelpers} from "./InvariantTestHelpers.sol";
 
 import {AddressFinder} from "../mock/AddressFinder.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
-import {MockBlastPoints} from "../mock/MockBlastPoints.sol";
-import {MockBlastYield} from "../mock/MockBlastYield.sol";
+import {MockBlastSwissKnife} from "../mock/MockBlastSwissKnife.sol";
 import {MockUmaCtfAdapter} from "../mock/MockUmaCtfAdapter.sol";
 import {ConditionalTokens} from "../mock/ConditionalTokens/ConditionalTokens.sol";
 import {CTHelpers} from "../mock/ConditionalTokens/CTHelpers.sol";
 import {MockCTFExchange} from "../mock/CTFExchange/MockCTFExchange.sol";
 import {MockNegRiskAdapter} from "../mock/NegRiskAdapter/MockNegRiskAdapter.sol";
+import {MockNegRiskOperator} from "../mock/NegRiskAdapter/MockNegRiskOperator.sol";
+import {MockNegRiskIdLib} from "../mock/NegRiskAdapter/MockNegRiskIdLib.sol";
 
 import {TestHelpers} from "./TestHelpers.sol";
 
@@ -220,7 +221,9 @@ contract Handler is InvariantTestHelpers {
 
         // This is just to make sure collateralization ratio is at least 100% as makerAmount can be equal to takerAmount
         // and the takerAmount will be multiplied by 1 + protocol fee basis points
-        makerAmount = makerAmount + ((makerAmount * _getProtocolFeeBasisPoints()) / 10_000);
+        makerAmount =
+            makerAmount +
+            ((makerAmount * _getProtocolFeeBasisPoints()) / (10_000 - _getProtocolFeeBasisPoints()));
 
         IPredictDotLoan.QuestionType questionType = _chooseQuestionType(seed);
         bool outcome = _chooseOutcome(seed);
@@ -245,7 +248,8 @@ contract Handler is InvariantTestHelpers {
         IPredictDotLoan.Proposal memory proposal = _generateLoanOffer(
             privateKey,
             order.makerAmount,
-            order.takerAmount + ((order.takerAmount * _getProtocolFeeBasisPoints()) / 10_000),
+            order.takerAmount +
+                ((order.takerAmount * _getProtocolFeeBasisPoints()) / (10_000 - _getProtocolFeeBasisPoints())),
             _chooseInterestRatePerSecond(seed),
             questionType,
             outcome
@@ -436,6 +440,7 @@ contract Handler is InvariantTestHelpers {
 
         _trackCurrentContractPositionBalance(borrowRequest.questionType, borrowRequest.outcome);
 
+        vm.prank(seed % 2 == 0 ? borrower : lender);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
 
         _trackCollateralDeposited(
@@ -463,8 +468,8 @@ contract Handler is InvariantTestHelpers {
 
         ) = predictDotLoan.loans(loanId);
         if (status != IPredictDotLoan.LoanStatus.Active) return;
-        if (callTime == 0 && vm.getBlockTimestamp() < startTime) {
-            vm.warp(startTime + (seed % 86_400));
+        if (callTime == 0 && vm.getBlockTimestamp() <= startTime) {
+            vm.warp(startTime + (seed % 86_400) + 1);
         }
         uint256 debt = predictDotLoan.calculateDebt(loanId);
         if (debt == 0) return;
@@ -473,7 +478,7 @@ contract Handler is InvariantTestHelpers {
         _trackCurrentContractPositionBalance(questionType, outcome);
         vm.startPrank(borrower);
         mockERC20.approve(address(predictDotLoan), type(uint256).max);
-        predictDotLoan.repay(loanId);
+        predictDotLoan.repay(loanId, debt);
         vm.stopPrank();
         _trackCollateralWithdrawn(questionType, outcome, _trackContractPositionBalanceChange(questionType, outcome));
     }
@@ -519,7 +524,9 @@ contract Handler is InvariantTestHelpers {
         IPredictDotLoan.Proposal memory proposal = _generateLoanOffer(
             privateKey,
             collateralAmount * 2,
-            ((collateralAmount * 2) * (debt + (debt * _getProtocolFeeBasisPoints()) / 10_000)) / collateralAmount,
+            ((collateralAmount * 2) *
+                (debt + (debt * _getProtocolFeeBasisPoints()) / (10_000 - _getProtocolFeeBasisPoints()))) /
+                collateralAmount,
             newInterestRatePerSecond,
             questionType,
             outcome
@@ -564,8 +571,14 @@ contract Handler is InvariantTestHelpers {
             vm.warp(startTime + minimumDuration);
         }
 
+        (IPredictDotLoan.QuestionType questionType, bool outcome) = _getLoanQuestionTypeAndOutcome(loanId);
+
+        _trackCurrentContractPositionBalance(questionType, outcome);
+
         vm.prank(lender);
         predictDotLoan.call(loanId);
+
+        _trackCollateralWithdrawn(questionType, outcome, _trackContractPositionBalanceChange(questionType, outcome));
     }
 
     function auction(uint256 seed) public countCall("auction") {
@@ -574,9 +587,19 @@ contract Handler is InvariantTestHelpers {
 
         uint256 loanId = bound(seed, 1, lastLoanId);
 
-        (, address lender, , , , , , , uint256 callTime, IPredictDotLoan.LoanStatus status, ) = predictDotLoan.loans(
-            loanId
-        );
+        (
+            ,
+            address lender,
+            ,
+            uint256 collateralAmount,
+            ,
+            ,
+            ,
+            ,
+            uint256 callTime,
+            IPredictDotLoan.LoanStatus status,
+
+        ) = predictDotLoan.loans(loanId);
 
         if (status != IPredictDotLoan.LoanStatus.Called || vm.getBlockTimestamp() > callTime + 1 days) {
             return;
@@ -587,7 +610,12 @@ contract Handler is InvariantTestHelpers {
         }
 
         uint256 debt = predictDotLoan.calculateDebt(loanId);
-        uint256 protocolFee = (debt * _getProtocolFeeBasisPoints()) / 10_000;
+        uint256 protocolFee = (debt * _getProtocolFeeBasisPoints()) / (10_000 - _getProtocolFeeBasisPoints());
+
+        // Collateralization ratio must be at least 100%
+        if (debt + protocolFee > collateralAmount) {
+            return;
+        }
 
         address whiteKnight = actors[bound(seed, 0, 99)];
         if (whiteKnight == lender) {
@@ -598,7 +626,7 @@ contract Handler is InvariantTestHelpers {
 
         vm.startPrank(whiteKnight);
         mockERC20.approve(address(predictDotLoan), type(uint256).max);
-        predictDotLoan.auction(loanId);
+        predictDotLoan.auction(loanId, predictDotLoan.auctionCurrentInterestRatePerSecond(loanId));
         vm.stopPrank();
 
         // A new loan is created when the loan is auctioned
@@ -928,12 +956,13 @@ contract Handler is InvariantTestHelpers {
 contract PredictDotLoan_Invariants is TestHelpers {
     Handler public handler;
 
+    MockBlastSwissKnife public mockBlastSwissKnife;
+
     function setUp() public {
         mockCTF = new ConditionalTokens("https://predict.fun");
 
         mockERC20 = new MockERC20("USDB", "USDB");
-        mockBlastYield = new MockBlastYield();
-        mockBlastPoints = new MockBlastPoints();
+        mockBlastSwissKnife = new MockBlastSwissKnife();
 
         mockUmaCtfAdapter = new MockUmaCtfAdapter(address(mockCTF));
         // TODO: Why does this throw an EVM revert? Just going to use
@@ -942,6 +971,9 @@ contract PredictDotLoan_Invariants is TestHelpers {
         // mockNegRiskUmaCtfAdapter = new MockUmaCtfAdapter(address(mockCTF));
         mockNegRiskUmaCtfAdapter = mockUmaCtfAdapter;
         mockNegRiskAdapter = new MockNegRiskAdapter(address(mockCTF), address(mockERC20));
+
+        mockNegRiskOperator = new MockNegRiskOperator(address(mockNegRiskAdapter));
+        mockNegRiskOperator.setQuestionId(negRiskQuestionId, MockNegRiskIdLib.getQuestionId(_getNegRiskMarketId(), 0));
 
         mockUmaCtfAdapter.prepareCondition(SINGLE_OUTCOME_QUESTION);
         mockUmaCtfAdapter.setPayoutStatus(questionId, MockUmaCtfAdapter.PayoutStatus.PriceNotAvailable);
@@ -954,8 +986,8 @@ contract PredictDotLoan_Invariants is TestHelpers {
         mockNegRiskCTFExchange = new MockCTFExchange(address(mockNegRiskAdapter), address(mockERC20));
 
         addressFinder = new AddressFinder();
-        addressFinder.changeImplementationAddress("Blast", address(mockBlastYield));
-        addressFinder.changeImplementationAddress("BlastPoints", address(mockBlastPoints));
+        addressFinder.changeImplementationAddress("Blast", address(mockBlastSwissKnife));
+        addressFinder.changeImplementationAddress("BlastPoints", address(mockBlastSwissKnife));
         addressFinder.changeImplementationAddress("BlastPointsOperator", blastPointsOperator);
         addressFinder.changeImplementationAddress("Governor", owner);
 
@@ -965,6 +997,7 @@ contract PredictDotLoan_Invariants is TestHelpers {
             address(mockNegRiskCTFExchange),
             address(mockUmaCtfAdapter),
             address(mockNegRiskUmaCtfAdapter),
+            address(mockNegRiskOperator),
             address(addressFinder),
             owner
         );

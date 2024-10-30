@@ -32,4 +32,6 @@ interface IConditionalTokens {
     function balanceOf(address account, uint256 id) external view returns (uint256);
 
     function safeTransferFrom(address from, address to, uint256 id, uint256 value, bytes memory data) external;
+
+    function isApprovedForAll(address account, address operator) external view returns (bool);
 }

@@ -17,6 +17,7 @@ contract BlastPredictDotLoan is BlastNativeYield, PredictDotLoan {
      * @param _negRiskCtfExchange predict.fun neg risk CTF exchange
      * @param _umaCtfAdapter Binary outcome UMA CTF adapter
      * @param _negRiskUmaCtfAdapter Neg risk UMA CTF adapter
+     * @param _negRiskOperator Neg risk operator
      * @param _addressFinder Address finder
      * @param _owner Contract owner
      */
@@ -26,6 +27,7 @@ contract BlastPredictDotLoan is BlastNativeYield, PredictDotLoan {
         address _negRiskCtfExchange,
         address _umaCtfAdapter,
         address _negRiskUmaCtfAdapter,
+        address _negRiskOperator,
         address _addressFinder,
         address _owner
     )
@@ -36,7 +38,8 @@ contract BlastPredictDotLoan is BlastNativeYield, PredictDotLoan {
             _ctfExchange,
             _negRiskCtfExchange,
             _umaCtfAdapter,
-            _negRiskUmaCtfAdapter
+            _negRiskUmaCtfAdapter,
+            _negRiskOperator
         )
     {}
 }
