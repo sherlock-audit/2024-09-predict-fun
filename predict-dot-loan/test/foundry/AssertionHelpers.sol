@@ -15,6 +15,7 @@ import {MockUmaCtfAdapter} from "../mock/MockUmaCtfAdapter.sol";
 import {ConditionalTokens} from "../mock/ConditionalTokens/ConditionalTokens.sol";
 import {MockCTFExchange} from "../mock/CTFExchange/MockCTFExchange.sol";
 import {MockNegRiskAdapter} from "../mock/NegRiskAdapter/MockNegRiskAdapter.sol";
+import {MockNegRiskOperator} from "../mock/NegRiskAdapter/MockNegRiskOperator.sol";
 
 import {TestParameters} from "./TestParameters.sol";
 import {Test} from "forge-std/Test.sol";
@@ -22,6 +23,8 @@ import {Test} from "forge-std/Test.sol";
 abstract contract AssertionHelpers is Test, TestParameters {
     bytes internal constant SINGLE_OUTCOME_QUESTION = "Adam Cochran for President 2024";
     bytes32 internal questionId = keccak256(SINGLE_OUTCOME_QUESTION);
+
+    bytes internal constant MULTI_OUTCOMES_MARKET = "US Presidential Election Winner 2024";
 
     bytes internal constant MULTI_OUTCOMES_QUESTION = "Will Adam Cochran become the president in 2024?";
     bytes32 internal negRiskQuestionId = keccak256(MULTI_OUTCOMES_QUESTION);
@@ -61,6 +64,7 @@ abstract contract AssertionHelpers is Test, TestParameters {
     MockUmaCtfAdapter internal mockNegRiskUmaCtfAdapter;
 
     MockNegRiskAdapter internal mockNegRiskAdapter;
+    MockNegRiskOperator internal mockNegRiskOperator;
 
     MockERC20 internal mockERC20;
 
@@ -80,7 +84,6 @@ abstract contract AssertionHelpers is Test, TestParameters {
         uint256 protocolFee
     );
     event LoansRefinanced(IPredictDotLoan.RefinancingResult[] results);
-    event LoanTokenStatusUpdated(address indexed token, bool isAllowed);
     event LoanTransferred(
         uint256 loanId,
         uint256 repaidAmount,
@@ -514,7 +517,7 @@ abstract contract AssertionHelpers is Test, TestParameters {
         uint256 collateralAmount,
         uint256 debt
     ) internal {
-        uint256 protocolFee = (debt * _getProtocolFeeBasisPoints()) / 10_000;
+        uint256 protocolFee = (debt * _getProtocolFeeBasisPoints()) / (10_000 - _getProtocolFeeBasisPoints());
         expectEmitCheckAll();
         emit LoanRefinanced(
             predictDotLoan.hashProposal(proposal),

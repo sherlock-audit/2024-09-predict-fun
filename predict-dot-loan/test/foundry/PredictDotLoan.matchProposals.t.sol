@@ -2,6 +2,8 @@
 
 pragma solidity ^0.8.25;
 
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+
 import {IPredictDotLoan} from "../../contracts/interfaces/IPredictDotLoan.sol";
 
 import {PredictDotLoan_Test} from "./PredictDotLoan.t.sol";
@@ -29,6 +31,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
             LOAN_AMOUNT
         );
 
+        vm.prank(protocolFeeBasisPoints % 2 == 0 ? borrower : lender);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
 
         _assertBorrowRequestFulfillmentData(borrowRequest);
@@ -70,6 +73,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
                 LOAN_AMOUNT
             );
 
+            vm.prank(difference % 2 == 0 ? borrower : lender);
             predictDotLoan.matchProposals(borrowRequest, loanOffer);
 
             _assertBorrowRequestFulfillmentData(borrowRequest);
@@ -121,11 +125,14 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
 
     function testFuzz_matchProposals_LoanOfferHasLongerDuration(uint256 duration) public {
         vm.assume(duration > LOAN_DURATION);
+
         {
             IPredictDotLoan.Proposal memory loanOffer = _generateLoanOffer(IPredictDotLoan.QuestionType.Binary);
             loanOffer.duration = duration;
             loanOffer.signature = _signProposal(loanOffer);
+
             IPredictDotLoan.Proposal memory borrowRequest = _generateBorrowRequest(IPredictDotLoan.QuestionType.Binary);
+
             _assertBalanceAndFulfillmentBeforeExecution(borrower, lender, loanOffer);
             _assertBalanceAndFulfillmentBeforeExecution(borrower, lender, borrowRequest);
             _assertProposalsMatchedEmitted(
@@ -136,9 +143,13 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
                 COLLATERAL_AMOUNT,
                 LOAN_AMOUNT
             );
+
+            vm.prank(duration % 2 == 0 ? borrower : lender);
             predictDotLoan.matchProposals(borrowRequest, loanOffer);
+
             _assertBorrowRequestFulfillmentData(borrowRequest);
             _assertLoanOfferFulfillmentData(loanOffer);
+
             assertEq(mockERC20.balanceOf(address(predictDotLoan)), 0);
             assertEq(mockERC20.balanceOf(borrower), loanOffer.loanAmount);
             assertEq(mockERC20.balanceOf(protocolFeeRecipient), 0);
@@ -164,6 +175,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
             IPredictDotLoan.LoanStatus status,
             IPredictDotLoan.QuestionType questionType
         ) = predictDotLoan.loans(1);
+
         assertEq(_borrower, borrower);
         assertEq(_lender, lender);
         assertEq(positionId, _getPositionId(true));
@@ -199,6 +211,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
                 LOAN_AMOUNT
             );
 
+            vm.prank(bot);
             predictDotLoan.matchProposals(borrowRequest, loanOffer);
 
             (bytes32 proposalId, uint256 _collateralAmount, uint256 _loanAmount) = predictDotLoan.getFulfillment(
@@ -263,6 +276,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
             predictDotLoan.hashProposal(borrowRequest)
         );
 
+        vm.prank(bot);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
 
         _assertBorrowRequestFulfillmentData(borrowRequest);
@@ -291,6 +305,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
             predictDotLoan.hashProposal(borrowRequest)
         );
 
+        vm.prank(bot);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
 
         _assertLoanOfferFulfillmentData(loanOffer);
@@ -317,7 +332,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         vm.prank(borrower2);
         mockCTF.setApprovalForAll(address(predictDotLoan), true);
 
-        _mintCTF(borrower2);
+        _mintCTF(borrower2, COLLATERAL_AMOUNT);
 
         vm.prank(lender2);
         predictDotLoan.acceptBorrowRequest(borrowRequest, borrowRequest.loanAmount / 2);
@@ -348,6 +363,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
             predictDotLoan.hashProposal(borrowRequest)
         );
 
+        vm.prank(bot);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
 
         _assertLoanOfferFulfillmentData(loanOffer);
@@ -384,7 +400,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         vm.prank(borrower2);
         mockCTF.setApprovalForAll(address(predictDotLoan), true);
 
-        _mintCTF(borrower2);
+        _mintCTF(borrower2, COLLATERAL_AMOUNT);
 
         vm.prank(lender2);
         predictDotLoan.acceptBorrowRequest(borrowRequest, (borrowRequest.loanAmount * 3) / 4);
@@ -415,6 +431,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
             predictDotLoan.hashProposal(borrowRequest)
         );
 
+        vm.prank(bot);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
 
         _assertBorrowRequestFulfillmentData(borrowRequest);
@@ -439,6 +456,49 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         _assertLoanCreatedThroughMatchingProposals_TwentyFivePercent();
     }
 
+    function test_matchProposals_CollateralizationRatioShouldNotDeviate() public {
+        // Collateral ratio: 20 / 10 = 200%
+        IPredictDotLoan.Proposal memory borrowRequest = _generateBorrowRequest(IPredictDotLoan.QuestionType.Binary);
+        borrowRequest.collateralAmount = 20 ether;
+        borrowRequest.loanAmount = 10 ether;
+        borrowRequest.signature = _signProposal(borrowRequest, borrowerPrivateKey);
+
+        // Collateral ratio: 5 / 5 = 100%
+        IPredictDotLoan.Proposal memory loanOffer = _generateLoanOffer(IPredictDotLoan.QuestionType.Binary);
+        loanOffer.collateralAmount = 5 ether;
+        loanOffer.loanAmount = 5 ether;
+        loanOffer.signature = _signProposal(loanOffer, lenderPrivateKey);
+
+        vm.prank(bot);
+        predictDotLoan.matchProposals(borrowRequest, loanOffer);
+
+        vm.prank(lender);
+        predictDotLoan.acceptBorrowRequest(borrowRequest, 5 ether);
+
+        (, , , uint256 collateralAmount, uint256 loanAmount, , , , , , ) = predictDotLoan.loans(1);
+
+        assertEq((collateralAmount * 1e18) / loanAmount, 1e18);
+
+        (, , , collateralAmount, loanAmount, , , , , , ) = predictDotLoan.loans(2);
+
+        assertEq((collateralAmount * 1e18) / loanAmount, 2e18);
+    }
+
+    function test_matchProposals_RevertIf_AccessControlUnauthorizedAccount() public {
+        IPredictDotLoan.Proposal memory loanOffer = _generateLoanOffer(IPredictDotLoan.QuestionType.Binary);
+        IPredictDotLoan.Proposal memory borrowRequest = _generateBorrowRequest(IPredictDotLoan.QuestionType.Binary);
+
+        vm.prank(address(420));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                address(420),
+                keccak256("PROPOSALS_MATCHER_ROLE")
+            )
+        );
+        predictDotLoan.matchProposals(borrowRequest, loanOffer);
+    }
+
     function testFuzz_matchProposals_RevertIf_ProtocolFeeBasisPointsMismatch_LoanOffer(
         uint8 protocolFeeBasisPoints
     ) public {
@@ -450,6 +510,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         loanOffer.protocolFeeBasisPoints = protocolFeeBasisPoints;
         loanOffer.signature = _signProposal(loanOffer);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.ProtocolFeeBasisPointsMismatch.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -465,6 +526,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         borrowRequest.protocolFeeBasisPoints = protocolFeeBasisPoints;
         borrowRequest.signature = _signProposal(borrowRequest, borrowerPrivateKey);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.ProtocolFeeBasisPointsMismatch.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -476,6 +538,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         borrowRequest.from = lender;
         borrowRequest.signature = _signProposal(borrowRequest);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.LenderIsBorrower.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -488,6 +551,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         borrowRequest.loanAmount = LOAN_AMOUNT / 11;
         borrowRequest.signature = _signProposal(borrowRequest, borrowerPrivateKey);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.FulfillAmountTooLow.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -500,6 +564,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         loanOffer.loanAmount = LOAN_AMOUNT / 11;
         loanOffer.signature = _signProposal(loanOffer);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.FulfillAmountTooLow.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -512,8 +577,10 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         borrowRequest.loanAmount = LOAN_AMOUNT / 2;
         borrowRequest.signature = _signProposal(borrowRequest, borrowerPrivateKey);
 
+        vm.prank(bot);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.FulfillAmountTooLow.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -526,28 +593,44 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         loanOffer.loanAmount = LOAN_AMOUNT / 2;
         loanOffer.signature = _signProposal(loanOffer);
 
+        vm.prank(bot);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.FulfillAmountTooLow.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
 
     function test_matchProposals_RevertIf_NotBorrowRequest() public {
         IPredictDotLoan.Proposal memory loanOffer = _generateLoanOffer(IPredictDotLoan.QuestionType.Binary);
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.NotBorrowRequest.selector);
         predictDotLoan.matchProposals(loanOffer, loanOffer);
     }
 
     function test_matchProposals_RevertIf_NotLoanOffer() public {
         IPredictDotLoan.Proposal memory borrowRequest = _generateBorrowRequest(IPredictDotLoan.QuestionType.Binary);
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.NotLoanOffer.selector);
         predictDotLoan.matchProposals(borrowRequest, borrowRequest);
+    }
+
+    function test_matchProposals_RevertIf_NoQuestionIdForOracleRequestId() public {
+        IPredictDotLoan.Proposal memory loanOffer = _generateLoanOffer(IPredictDotLoan.QuestionType.NegRisk);
+        IPredictDotLoan.Proposal memory borrowRequest = _generateBorrowRequest(IPredictDotLoan.QuestionType.NegRisk);
+
+        mockNegRiskOperator.setQuestionId(negRiskQuestionId, bytes32(0));
+
+        vm.prank(bot);
+        vm.expectRevert(IPredictDotLoan.NoQuestionIdForOracleRequestId.selector);
+        predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
 
     function test_matchProposals_RevertIf_PositionIdMismatch() public {
         IPredictDotLoan.Proposal memory loanOffer = _generateLoanOffer(IPredictDotLoan.QuestionType.Binary);
         IPredictDotLoan.Proposal memory borrowRequest = _generateBorrowRequest(IPredictDotLoan.QuestionType.NegRisk);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.PositionIdMismatch.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -556,6 +639,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         IPredictDotLoan.Proposal memory loanOffer = _generateLoanOffer(IPredictDotLoan.QuestionType.Binary);
         IPredictDotLoan.Proposal memory borrowRequest = _generateBorrowRequest(IPredictDotLoan.QuestionType.NegRisk);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.PositionIdMismatch.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -567,6 +651,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         IPredictDotLoan.Proposal memory borrowRequest = _generateBorrowRequest(IPredictDotLoan.QuestionType.Binary);
         loanOffer.loanAmount = borrowRequest.loanAmount - delta;
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.UnacceptableCollateralizationRatio.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -577,6 +662,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
 
         loanOffer.duration = borrowRequest.duration - 1;
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.UnacceptableDuration.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -587,6 +673,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
 
         loanOffer.interestRatePerSecond = borrowRequest.interestRatePerSecond + 1;
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.UnacceptableInterestRatePerSecond.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -597,6 +684,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         loanOffer.signature = _signProposal(loanOffer);
         IPredictDotLoan.Proposal memory borrowRequest = _generateBorrowRequest(IPredictDotLoan.QuestionType.Binary);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.Expired.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -607,6 +695,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         borrowRequest.validUntil = block.timestamp - 1;
         borrowRequest.signature = _signProposal(loanOffer);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.Expired.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -617,6 +706,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         loanOffer.signature = _signProposal(loanOffer);
         IPredictDotLoan.Proposal memory borrowRequest = _generateBorrowRequest(IPredictDotLoan.QuestionType.Binary);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.InvalidSignature.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -627,6 +717,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         borrowRequest.from = address(69);
         borrowRequest.signature = _signProposal(borrowRequest);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.InvalidSignature.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -636,6 +727,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         loanOffer.signature = new bytes(65);
         IPredictDotLoan.Proposal memory borrowRequest = _generateBorrowRequest(IPredictDotLoan.QuestionType.Binary);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.InvalidSignature.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -645,6 +737,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         IPredictDotLoan.Proposal memory borrowRequest = _generateBorrowRequest(IPredictDotLoan.QuestionType.Binary);
         borrowRequest.signature = new bytes(65);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.InvalidSignature.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -654,6 +747,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         loanOffer.signature = new bytes(69);
         IPredictDotLoan.Proposal memory borrowRequest = _generateBorrowRequest(IPredictDotLoan.QuestionType.Binary);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.InvalidSignature.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -663,6 +757,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         IPredictDotLoan.Proposal memory borrowRequest = _generateBorrowRequest(IPredictDotLoan.QuestionType.Binary);
         borrowRequest.signature = new bytes(69);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.InvalidSignature.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -677,6 +772,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         vm.prank(loanOffer.from);
         predictDotLoan.cancel(requests);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.ProposalCancelled.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -691,6 +787,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         vm.prank(borrowRequest.from);
         predictDotLoan.cancel(requests);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.ProposalCancelled.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -702,6 +799,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         vm.prank(loanOffer.from);
         predictDotLoan.incrementNonces(true, false);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.InvalidNonce.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -713,6 +811,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         vm.prank(borrowRequest.from);
         predictDotLoan.incrementNonces(false, true);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.InvalidNonce.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -723,6 +822,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
 
         loanOffer.loanAmount = loanOffer.collateralAmount + 1;
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.CollateralizationRatioTooLow.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -731,8 +831,9 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         IPredictDotLoan.Proposal memory loanOffer = _generateLoanOffer(IPredictDotLoan.QuestionType.Binary);
         IPredictDotLoan.Proposal memory borrowRequest = _generateBorrowRequest(IPredictDotLoan.QuestionType.Binary);
 
-        loanOffer.loanAmount = loanOffer.collateralAmount + 1;
+        borrowRequest.loanAmount = borrowRequest.collateralAmount + 1;
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.CollateralizationRatioTooLow.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -747,6 +848,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
 
         loanOffer.interestRatePerSecond = interestRatePerSecond;
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.InterestRatePerSecondTooLow.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -761,6 +863,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
 
         borrowRequest.interestRatePerSecond = interestRatePerSecond;
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.InterestRatePerSecondTooLow.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -775,6 +878,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
 
         loanOffer.interestRatePerSecond = interestRatePerSecond;
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.InterestRatePerSecondTooHigh.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -789,6 +893,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
 
         borrowRequest.interestRatePerSecond = interestRatePerSecond;
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.InterestRatePerSecondTooHigh.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -799,6 +904,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         IPredictDotLoan.Proposal memory loanOffer = _generateLoanOffer(IPredictDotLoan.QuestionType.Binary);
         IPredictDotLoan.Proposal memory borrowRequest = _generateBorrowRequest(IPredictDotLoan.QuestionType.Binary);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.PositionIdNotTradeableOnExchange.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -812,6 +918,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         IPredictDotLoan.Proposal memory loanOffer = _generateLoanOffer(IPredictDotLoan.QuestionType.NegRisk);
         IPredictDotLoan.Proposal memory borrowRequest = _generateBorrowRequest(IPredictDotLoan.QuestionType.NegRisk);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.PositionIdNotTradeableOnExchange.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -822,6 +929,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
 
         mockUmaCtfAdapter.setPayoutStatus(questionId, MockUmaCtfAdapter.PayoutStatus.HasPrice);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.QuestionResolved.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -832,16 +940,19 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
 
         mockUmaCtfAdapter.setPayoutStatus(questionId, MockUmaCtfAdapter.PayoutStatus.Flagged);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.AbnormalQuestionState.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
 
         mockUmaCtfAdapter.setPayoutStatus(questionId, MockUmaCtfAdapter.PayoutStatus.NotInitialized);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.AbnormalQuestionState.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
 
         mockUmaCtfAdapter.setPayoutStatus(questionId, MockUmaCtfAdapter.PayoutStatus.Paused);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.AbnormalQuestionState.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -850,8 +961,9 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         IPredictDotLoan.Proposal memory loanOffer = _generateLoanOffer(IPredictDotLoan.QuestionType.NegRisk);
         IPredictDotLoan.Proposal memory borrowRequest = _generateBorrowRequest(IPredictDotLoan.QuestionType.NegRisk);
 
-        mockNegRiskAdapter.setDetermined(negRiskQuestionId, true);
+        mockNegRiskAdapter.setDetermined(_getNegRiskMarketId(), true);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.MarketResolved.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -866,6 +978,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         borrowRequest.salt = 1;
         borrowRequest.signature = _signProposal(borrowRequest, borrowerPrivateKey);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.SaltAlreadyUsed.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }
@@ -880,6 +993,7 @@ contract PredictDotLoan_MatchProposals_Test is PredictDotLoan_Test {
         loanOffer.salt = 1;
         loanOffer.signature = _signProposal(loanOffer);
 
+        vm.prank(bot);
         vm.expectRevert(IPredictDotLoan.SaltAlreadyUsed.selector);
         predictDotLoan.matchProposals(borrowRequest, loanOffer);
     }

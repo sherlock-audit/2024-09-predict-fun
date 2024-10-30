@@ -17,6 +17,8 @@ import {ConditionalTokens} from "../mock/ConditionalTokens/ConditionalTokens.sol
 import {CTHelpers} from "../mock/ConditionalTokens/CTHelpers.sol";
 import {MockCTFExchange} from "../mock/CTFExchange/MockCTFExchange.sol";
 import {MockNegRiskAdapter} from "../mock/NegRiskAdapter/MockNegRiskAdapter.sol";
+import {MockNegRiskOperator} from "../mock/NegRiskAdapter/MockNegRiskOperator.sol";
+import {MockNegRiskIdLib} from "../mock/NegRiskAdapter/MockNegRiskIdLib.sol";
 
 import {AssertionHelpers} from "./AssertionHelpers.sol";
 
@@ -38,10 +40,14 @@ abstract contract TestHelpers is AssertionHelpers {
         mockUmaCtfAdapter = new MockUmaCtfAdapter(address(mockCTF));
         mockNegRiskUmaCtfAdapter = new MockUmaCtfAdapter(address(mockCTF));
         mockNegRiskAdapter = new MockNegRiskAdapter(address(mockCTF), address(mockERC20));
+        mockNegRiskOperator = new MockNegRiskOperator(address(mockNegRiskAdapter));
+
+        mockNegRiskOperator.setQuestionId(negRiskQuestionId, MockNegRiskIdLib.getQuestionId(_getNegRiskMarketId(), 0));
 
         mockUmaCtfAdapter.prepareCondition(SINGLE_OUTCOME_QUESTION);
         mockUmaCtfAdapter.setPayoutStatus(questionId, MockUmaCtfAdapter.PayoutStatus.PriceNotAvailable);
 
+        mockNegRiskUmaCtfAdapter.prepareCondition(MULTI_OUTCOMES_QUESTION);
         mockNegRiskUmaCtfAdapter.setPayoutStatus(negRiskQuestionId, MockUmaCtfAdapter.PayoutStatus.PriceNotAvailable);
 
         mockCTFExchange = new MockCTFExchange(address(mockCTF), address(mockERC20));
@@ -59,6 +65,7 @@ abstract contract TestHelpers is AssertionHelpers {
             address(mockNegRiskCTFExchange),
             address(mockUmaCtfAdapter),
             address(mockNegRiskUmaCtfAdapter),
+            address(mockNegRiskOperator),
             address(addressFinder),
             owner
         );
@@ -79,6 +86,7 @@ abstract contract TestHelpers is AssertionHelpers {
         );
 
         predictDotLoan.grantRole(keccak256("REFINANCIER_ROLE"), bot);
+        predictDotLoan.grantRole(keccak256("PROPOSALS_MATCHER_ROLE"), bot);
 
         mockNegRiskAdapter.addAdmin(address(mockNegRiskCTFExchange));
 
@@ -94,8 +102,8 @@ abstract contract TestHelpers is AssertionHelpers {
         vm.label(borrower, "Borrower");
     }
 
-    function _mintCTF(address to) internal {
-        mockERC20.mint(to, COLLATERAL_AMOUNT);
+    function _mintCTF(address to, uint256 collateralAmount) internal {
+        mockERC20.mint(to, collateralAmount);
 
         bytes32 conditionId = CTHelpers.getConditionId(address(mockUmaCtfAdapter), questionId, 2);
 
@@ -104,13 +112,13 @@ abstract contract TestHelpers is AssertionHelpers {
         partition[1] = 2;
 
         vm.startPrank(to);
-        mockERC20.approve(address(mockCTF), COLLATERAL_AMOUNT);
-        mockCTF.splitPosition(IERC20(address(mockERC20)), bytes32(0), conditionId, partition, COLLATERAL_AMOUNT);
+        mockERC20.approve(address(mockCTF), collateralAmount);
+        mockCTF.splitPosition(IERC20(address(mockERC20)), bytes32(0), conditionId, partition, collateralAmount);
         vm.stopPrank();
     }
 
-    function _mintNegRiskCTF(address to) internal {
-        mockERC20.mint(to, COLLATERAL_AMOUNT);
+    function _mintNegRiskCTF(address to, uint256 collateralAmount) internal {
+        mockERC20.mint(to, collateralAmount);
 
         bytes32 conditionId = mockNegRiskAdapter.getConditionId(negRiskQuestionId);
 
@@ -121,8 +129,8 @@ abstract contract TestHelpers is AssertionHelpers {
         partition[1] = 2;
 
         vm.startPrank(to);
-        mockERC20.approve(address(mockNegRiskAdapter), COLLATERAL_AMOUNT);
-        mockNegRiskAdapter.splitPosition(address(mockERC20), bytes32(0), conditionId, partition, COLLATERAL_AMOUNT);
+        mockERC20.approve(address(mockNegRiskAdapter), collateralAmount);
+        mockNegRiskAdapter.splitPosition(address(mockERC20), bytes32(0), conditionId, partition, collateralAmount);
         vm.stopPrank();
     }
 
@@ -225,10 +233,11 @@ abstract contract TestHelpers is AssertionHelpers {
         proposal.interestRatePerSecond = INTEREST_RATE_PER_SECOND - 1;
         uint256 debt = predictDotLoan.calculateDebt(1);
         uint256 protocolFeeBasisPoints = _getProtocolFeeBasisPoints();
-        proposal.loanAmount = debt + (debt * protocolFeeBasisPoints) / 10_000;
+        proposal.loanAmount = debt + (debt * protocolFeeBasisPoints) / (10_000 - protocolFeeBasisPoints);
+        uint256 expectedDebt = 700.091338682534955100 ether;
         assertEq(
             proposal.loanAmount,
-            700091338682534955100 + (700091338682534955100 * protocolFeeBasisPoints) / 10_000
+            expectedDebt + (expectedDebt * protocolFeeBasisPoints) / (10_000 - protocolFeeBasisPoints)
         );
         proposal.duration = LOAN_DURATION * 2;
         proposal.signature = _signProposal(proposal, lender2PrivateKey);
@@ -243,7 +252,7 @@ abstract contract TestHelpers is AssertionHelpers {
         proposal.loanAmount =
             predictDotLoan.calculateDebt(1) +
             (predictDotLoan.calculateDebt(1) * _getProtocolFeeBasisPoints()) /
-            10_000 +
+            (10_000 - _getProtocolFeeBasisPoints()) +
             100 ether;
         proposal.duration = LOAN_DURATION * 2;
         proposal.signature = _signProposal(proposal, lender2PrivateKey);
@@ -283,5 +292,19 @@ abstract contract TestHelpers is AssertionHelpers {
             COLLATERAL_AMOUNT / 2, // 50c
             Side.SELL
         );
+    }
+
+    function _mintTokensAndApproveForSetup(uint256 loanAmount, uint256 collateralAmount) internal {
+        mockERC20.mint(lender, loanAmount);
+        vm.prank(lender);
+        mockERC20.approve(address(predictDotLoan), loanAmount);
+        vm.prank(borrower);
+        mockCTF.setApprovalForAll(address(predictDotLoan), true);
+        _mintCTF(borrower, collateralAmount);
+        _mintNegRiskCTF(borrower, collateralAmount);
+    }
+
+    function _getNegRiskMarketId() internal view returns (bytes32 marketId) {
+        marketId = MockNegRiskIdLib.getMarketId(address(mockNegRiskOperator), 0, MULTI_OUTCOMES_MARKET);
     }
 }

@@ -120,12 +120,13 @@ interface IPredictDotLoan {
                         LOAN LIFECYCLE EVENTS
     //////////////////////////////////////////////////////////////*/
 
-    event LoanTokenStatusUpdated(address indexed token, bool isAllowed);
     event LoanCalled(uint256 loanId);
     event LoanDefaulted(uint256 loanId);
     /**
      * @dev startTime is always going to be block.timestamp so we are not going to add
      *      it to the event. Indexers should just use block's timestamp.
+     *
+     *      loanAmount includes the protocol fee
      */
     event LoanRefinanced(
         bytes32 proposalId,
@@ -155,6 +156,8 @@ interface IPredictDotLoan {
      *      it to the event. Indexers should just use block's timestamp.
      *
      *      collateralToken is always going to be CTF so we are not going to add it to the event neither.
+     *
+     *      loanAmount includes the protocol fee
      */
     event ProposalAccepted(
         uint256 loanId,
@@ -174,6 +177,8 @@ interface IPredictDotLoan {
      *      collateralToken is always going to be CTF so we are not going to add it to the event neither.
      *
      *      proposalType is always going to be LoanOffer so we are not going to add it to the event neither.
+     *
+     *      loanAmount includes the protocol fee
      */
     event OrderFilledUsingProposal(
         bytes32 proposalId,
@@ -191,6 +196,8 @@ interface IPredictDotLoan {
      *      it to the event. Indexers should just use block's timestamp.
      *
      *      collateralToken is always going to be CTF so we are not going to add it to the event neither.
+     *
+     *      loanAmount includes the protocol fee
      */
     event ProposalsMatched(
         bytes32 loanOfferProposalId,
@@ -227,6 +234,7 @@ interface IPredictDotLoan {
     error BorrowerDidNotEnableAutoRefinancing(address borrower);
     error CollateralizationRatioTooLow();
     error ContractOnlyAcceptsCTF();
+    error MaxRepaymentAmountExceeded();
     error Expired();
     error FulfillAmountTooHigh();
     error FulfillAmountTooLow();
@@ -234,12 +242,15 @@ interface IPredictDotLoan {
     error InterestRatePerSecondTooHigh();
     error InterestRatePerSecondTooLow();
     error InvalidLoanStatus();
+    error InvalidNegRiskOperator();
     error InvalidNonce();
     error InvalidSignature();
     error LenderIsBorrower();
+    error LoanCannotBeRepaidInstantly();
     error LoanNotMatured();
     error MarketResolved();
     error NewLenderIsTheSameAsOldLender();
+    error NoQuestionIdForOracleRequestId();
     error NoSaltCancellationRequests();
     error NotBorrowRequest();
     error NotCancelling();
@@ -258,6 +269,7 @@ interface IPredictDotLoan {
     error QuestionResolved();
     error SaltAlreadyCancelled(uint256 salt);
     error SaltAlreadyUsed();
+    error SellerMustBeThirdParty();
     error UnacceptableCollateralizationRatio();
     error UnacceptableDuration();
     error UnacceptableInterestRatePerSecond();
@@ -271,6 +283,8 @@ interface IPredictDotLoan {
      *         Each fulfillment must fulfill at least 10% of the borrow amount. However, if there are less than 10% of the loan amount left to be fulfilled,
      *         the remaining amount will be fulfilled as long as it fills the rest of the order.
      *
+     *         A protocol fee is charged on the fulfill amount. If the fulfill amount is 100 USDB and the protocol fee % is 1%, the borrower receives 99 USDB.
+     *
      * @param proposal The borrow request to accept
      * @param fulfillAmount Loan amount to fulfill
      */
@@ -281,6 +295,8 @@ interface IPredictDotLoan {
      *         Each fulfillment must fulfill at least 10% of the loan amount. However, if there are less than 10% of the loan amount left to be fulfilled,
      *         the remaining amount will be fulfilled as long as it fills the rest of the order.
      *
+     *         A protocol fee is charged on the fulfill amount. If the fulfill amount is 100 USDB and the protocol fee % is 1%, the borrower receives 99 USDB.
+     *
      * @param proposal The loan offer to accept
      * @param fulfillAmount Loan amount to fulfill
      */
@@ -288,6 +304,9 @@ interface IPredictDotLoan {
 
     /**
      * @notice Borrowers can accept loan offers and then use the borrowed amount to fill an order on the CTF exchange.
+     *
+     *         A protocol fee is charged on top of the sell order's taker amount. If the taker amount is 100 USDB and the protocol fee % is 1%,
+     *         the borrower receives 100 USDB, which is used to fill the order, and is charged 1.0101010101 USDB in protocol fee.
      *
      * @param exchangeOrder The exchange order to fill
      * @param proposal The loan offer to accept
@@ -311,12 +330,18 @@ interface IPredictDotLoan {
      * @notice Repay a loan. The loan must be repaid in entirety.
      *
      * @param loanId The loan ID to repay
+     * @param maxRepaymentAmount The maximum repayment amount. If the transaction is pending for too long,
+     *                           the debt might increase to a point where it no longer makese sense for the
+     *                           borrower to repay the loan.
      */
-    function repay(uint256 loanId) external;
+    function repay(uint256 loanId, uint256 maxRepaymentAmount) external;
 
     /**
      * @notice Refinance a loan. Only callable by the borrower.
      *         The new lender must offer a rate better than the current rate.
+     *
+     *         A protocol fee is charged on top of the debt. If the borrower owes 100 USDB and the protocol fee % is 1%,
+     *         the borrower receives 100 USDB, which is used to repay the old lender, and is charged 1.0101010101 USDB in protocol fee.
      *
      * @param refinancing The refinancing struct includes loanId, loan proposal, and signature
      */
@@ -340,9 +365,13 @@ interface IPredictDotLoan {
      * @notice Bid on a called loan. The interest rate per second increases linearly with time
      *         since the loan was called. The maximum interest rate per second is 10,000% APY.
      *
+     *         A protocol fee is charged on top of the debt. If the borrower owes 100 USDB and the protocol fee % is 1%,
+     *         the borrower receives 100 USDB, which is used to repay the old lender, and is charged 1.0101010101 USDB in protocol fee.
+     *
      * @param loanId The loan ID to auction
+     * @param maxInterestRatePerSecond The maximum interest rate per second to bid at
      */
-    function auction(uint256 loanId) external;
+    function auction(uint256 loanId, uint256 maxInterestRatePerSecond) external;
 
     /**
      * @notice Default on a loan and transfer the collateral to the lender.

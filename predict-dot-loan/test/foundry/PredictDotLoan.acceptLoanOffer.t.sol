@@ -63,7 +63,7 @@ contract PredictDotLoan_AcceptLoanOffer_Test is PredictDotLoan_Test {
         proposal.signature = _signProposal(proposal, lender2PrivateKey);
 
         mockERC20.mint(proposal.from, proposal.loanAmount);
-        _mintCTF(borrower);
+        _mintCTF(borrower, COLLATERAL_AMOUNT);
 
         vm.prank(proposal.from);
         mockERC20.approve(address(predictDotLoan), proposal.loanAmount);
@@ -249,7 +249,7 @@ contract PredictDotLoan_AcceptLoanOffer_Test is PredictDotLoan_Test {
     function testFuzz_acceptLoanOffer_PartialFulfillment_FulfillAmountLowerThanTenPercentButFillTheProposal(
         uint256 amount
     ) public {
-        vm.assume(amount < LOAN_AMOUNT / 10);
+        vm.assume(amount > 0 && amount < LOAN_AMOUNT / 10);
 
         IPredictDotLoan.Proposal memory proposal = _generateLoanOffer(IPredictDotLoan.QuestionType.Binary);
 
@@ -274,7 +274,7 @@ contract PredictDotLoan_AcceptLoanOffer_Test is PredictDotLoan_Test {
         address currentBorrower = address(888);
 
         while (fulfilledAmount < LOAN_AMOUNT) {
-            _mintCTF(currentBorrower);
+            _mintCTF(currentBorrower, COLLATERAL_AMOUNT);
 
             uint256 fulfillAmount = bound(seed, LOAN_AMOUNT / 10, (LOAN_AMOUNT * 11) / 100);
             seed = uint256(keccak256(abi.encodePacked(seed)));
@@ -315,6 +315,16 @@ contract PredictDotLoan_AcceptLoanOffer_Test is PredictDotLoan_Test {
 
         assertEq(mockCTF.balanceOf(address(predictDotLoan), _getPositionId(true)), proposal.collateralAmount);
         _assertLoanOfferFulfillmentData(proposal);
+    }
+
+    function testacceptLoanOffer_RevertIf_FulfillAmountTooLow_Zero() public {
+        IPredictDotLoan.Proposal memory proposal = _generateLoanOffer(IPredictDotLoan.QuestionType.Binary);
+
+        vm.prank(borrower);
+        predictDotLoan.acceptLoanOffer(proposal, proposal.loanAmount);
+
+        vm.expectRevert(IPredictDotLoan.FulfillAmountTooLow.selector);
+        predictDotLoan.acceptLoanOffer(proposal, 0);
     }
 
     function testFuzz_acceptLoanOffer_PartialFulfillment_RevertIf_FulfillAmountTooLow(uint256 amount) public {
