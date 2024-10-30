@@ -15,22 +15,13 @@ import {MockUmaCtfAdapter} from "../mock/MockUmaCtfAdapter.sol";
 import {ConditionalTokens} from "../mock/ConditionalTokens/ConditionalTokens.sol";
 import {MockCTFExchange} from "../mock/CTFExchange/MockCTFExchange.sol";
 import {MockNegRiskAdapter} from "../mock/NegRiskAdapter/MockNegRiskAdapter.sol";
+import {MockNegRiskOperator} from "../mock/NegRiskAdapter/MockNegRiskOperator.sol";
 
 contract PredictDotLoan_Test is TestHelpers {
     function setUp() public {
         _deploy();
 
-        mockERC20.mint(lender, LOAN_AMOUNT);
-
-        vm.prank(lender);
-        mockERC20.approve(address(predictDotLoan), LOAN_AMOUNT);
-
-        vm.startPrank(borrower);
-        mockCTF.setApprovalForAll(address(predictDotLoan), true);
-        vm.stopPrank();
-
-        _mintCTF(borrower);
-        _mintNegRiskCTF(borrower);
+        _mintTokensAndApproveForSetup(LOAN_AMOUNT, COLLATERAL_AMOUNT);
     }
 
     function test_setUpState() public view {
@@ -86,6 +77,23 @@ contract PredictDotLoan_Test is TestHelpers {
             address(mockNegRiskCTFExchange),
             address(mockUmaCtfAdapter),
             address(mockNegRiskUmaCtfAdapter),
+            address(mockNegRiskOperator),
+            address(addressFinder),
+            owner
+        );
+    }
+
+    function test_setUpState_RevertIf_InvalidNegRiskOperator() public {
+        mockNegRiskOperator = new MockNegRiskOperator(address(0));
+
+        vm.expectRevert(IPredictDotLoan.InvalidNegRiskOperator.selector);
+        new BlastPredictDotLoan(
+            protocolFeeRecipient,
+            address(mockCTFExchange),
+            address(mockNegRiskCTFExchange),
+            address(mockUmaCtfAdapter),
+            address(mockNegRiskUmaCtfAdapter),
+            address(mockNegRiskOperator),
             address(addressFinder),
             owner
         );
@@ -102,6 +110,7 @@ contract PredictDotLoan_Test is TestHelpers {
             address(mockNegRiskCTFExchange),
             address(mockUmaCtfAdapter),
             address(mockNegRiskUmaCtfAdapter),
+            address(mockNegRiskOperator),
             address(addressFinder),
             owner
         );
@@ -111,13 +120,13 @@ contract PredictDotLoan_Test is TestHelpers {
         IPredictDotLoan.Proposal memory loanOffer = _generateLoanOffer(IPredictDotLoan.QuestionType.Binary);
         assertEq(
             predictDotLoan.hashProposal(loanOffer),
-            bytes32(0x9d9a8300308de303cae46e4593e65763c189e362e5575032e96d2fac0357a2f7)
+            bytes32(0x6d393a11cfb314f2d231c90b9418fba5a5402bc159de79138e5923296d891429)
         );
 
         IPredictDotLoan.Proposal memory borrowRequest = _generateBorrowRequest(IPredictDotLoan.QuestionType.Binary);
         assertEq(
             predictDotLoan.hashProposal(borrowRequest),
-            bytes32(0xb3d2cbc081975df3fd44b85f7849f26fa8cb0eba76d24c3c687db4a081437398)
+            bytes32(0xdee5a2f50c573c6c3f2a115fb91412b1f452a1c67c5ad14cd0dfadd0fda72972)
         );
     }
 
@@ -233,7 +242,7 @@ contract PredictDotLoan_Test is TestHelpers {
 
         vm.startPrank(borrower);
         mockERC20.approve(address(predictDotLoan), debt);
-        predictDotLoan.repay(1);
+        predictDotLoan.repay(1, debt);
         vm.stopPrank();
 
         IPredictDotLoan.LoanStatus status = _getLoanStatus(1);
@@ -266,7 +275,7 @@ contract PredictDotLoan_Test is TestHelpers {
 
         vm.startPrank(borrower);
         mockERC20.approve(address(predictDotLoan), debt);
-        predictDotLoan.repay(1);
+        predictDotLoan.repay(1, debt);
         vm.stopPrank();
 
         IPredictDotLoan.LoanStatus status = _getLoanStatus(1);
@@ -312,7 +321,7 @@ contract PredictDotLoan_Test is TestHelpers {
 
         _updateProtocolFeeRecipientAndBasisPoints(protocolFeeBasisPoints);
 
-        uint256 expectedProtocolFee = (debt * protocolFeeBasisPoints) / 10_000;
+        uint256 expectedProtocolFee = (debt * protocolFeeBasisPoints) / (10_000 - protocolFeeBasisPoints);
 
         mockERC20.mint(whiteKnight, debt + expectedProtocolFee);
 
@@ -323,7 +332,7 @@ contract PredictDotLoan_Test is TestHelpers {
         expectEmitCheckAll();
         emit LoanTransferred(1, debt, expectedProtocolFee, 2, whiteKnight, currentInterestRatePerSecond);
 
-        predictDotLoan.auction(1);
+        predictDotLoan.auction(1, currentInterestRatePerSecond);
 
         vm.stopPrank();
 

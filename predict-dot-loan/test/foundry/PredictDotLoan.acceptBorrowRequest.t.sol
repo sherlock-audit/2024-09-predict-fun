@@ -12,7 +12,7 @@ contract PredictDotLoan_AcceptBorrowRequest_Test is PredictDotLoan_Test {
     function test_acceptBorrowRequest_EIP1271() public {
         wallet = new MockEIP1271Wallet(borrower);
         vm.label(address(wallet), "Borrower's EIP-1271 Wallet");
-        _mintCTF(address(wallet));
+        _mintCTF(address(wallet), COLLATERAL_AMOUNT);
         vm.prank(address(wallet));
         mockCTF.setApprovalForAll(address(predictDotLoan), true);
         IPredictDotLoan.Proposal memory proposal = _generateBorrowRequest(IPredictDotLoan.QuestionType.Binary);
@@ -63,7 +63,7 @@ contract PredictDotLoan_AcceptBorrowRequest_Test is PredictDotLoan_Test {
         proposal.signature = _signProposal(proposal, borrower2PrivateKey);
 
         mockERC20.mint(lender, proposal.loanAmount);
-        _mintCTF(borrower2);
+        _mintCTF(borrower2, COLLATERAL_AMOUNT);
 
         vm.prank(lender);
         mockERC20.approve(address(predictDotLoan), proposal.loanAmount);
@@ -242,8 +242,7 @@ contract PredictDotLoan_AcceptBorrowRequest_Test is PredictDotLoan_Test {
     function testFuzz_acceptBorrowRequest_PartialFulfillment_FulfillAmountLowerThanTenPercentButFillTheProposal(
         uint256 amount
     ) public {
-        emit log_named_uint("amount", amount);
-        vm.assume(amount < LOAN_AMOUNT / 10);
+        vm.assume(amount > 0 && amount < LOAN_AMOUNT / 10);
 
         IPredictDotLoan.Proposal memory proposal = _generateBorrowRequest(IPredictDotLoan.QuestionType.Binary);
 
@@ -313,6 +312,16 @@ contract PredictDotLoan_AcceptBorrowRequest_Test is PredictDotLoan_Test {
 
         assertEq(mockCTF.balanceOf(address(predictDotLoan), _getPositionId(true)), proposal.collateralAmount);
         _assertBorrowRequestFulfillmentData(proposal);
+    }
+
+    function test_acceptBorrowRequest_RevertIf_FulfillAmountTooLow_Zero() public {
+        IPredictDotLoan.Proposal memory proposal = _generateBorrowRequest(IPredictDotLoan.QuestionType.Binary);
+
+        vm.prank(lender);
+        predictDotLoan.acceptBorrowRequest(proposal, proposal.loanAmount);
+
+        vm.expectRevert(IPredictDotLoan.FulfillAmountTooLow.selector);
+        predictDotLoan.acceptBorrowRequest(proposal, 0);
     }
 
     function testFuzz_acceptBorrowRequest_PartialFulfillment_RevertIf_FulfillAmountTooLow(uint256 amount) public {

@@ -115,6 +115,10 @@ In order for a new loan to be refinanced, the following conditions must be fulfi
 1. The new loan offer must have an interest rate at least as good as the current loan's
 2. The new loan offer's collateral amount required must not be higher than the current loan's
 
+The old loan is being repaid with the new loan and the protocol can charge a fee on the loan amount. With each refinance,
+the collateral ratio of the loan decreases as the loan amount increases. At some point it will no longer be possible to
+refinance the loan because the collateral ratio will be below 100%.
+
 ```mermaid
 sequenceDiagram
     Lender/Borrower->>+PredictDotLoan: acceptBorrowRequest(borrowRequest, fulfillAmount)/acceptLoanOffer(loanOffer, fulfillAmount)
@@ -139,6 +143,9 @@ sequenceDiagram
 ```
 
 ### Bid on auctioned collateral
+
+The old loan is being repaid with the new loan and the protocol can charge a fee on the loan amount.
+If the collateral ratio is below 100%, the loan cannot be auctioned.
 
 ```mermaid
 sequenceDiagram

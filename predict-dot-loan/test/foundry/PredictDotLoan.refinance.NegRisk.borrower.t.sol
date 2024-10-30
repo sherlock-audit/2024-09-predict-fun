@@ -25,7 +25,7 @@ contract PredictDotLoan_Refinance_NegRisk_Borrower_Test is PredictDotLoan_Test {
         mockERC20.approve(address(predictDotLoan), proposal.loanAmount);
 
         uint256 debt = predictDotLoan.calculateDebt(1);
-        uint256 protocolFee = (debt * protocolFeeBasisPoints) / 10_000;
+        uint256 protocolFee = (debt * protocolFeeBasisPoints) / (10_000 - protocolFeeBasisPoints);
 
         _assertLoanRefinancedEmitted(proposal, COLLATERAL_AMOUNT, debt);
 
@@ -38,7 +38,10 @@ contract PredictDotLoan_Refinance_NegRisk_Borrower_Test is PredictDotLoan_Test {
 
         assertEq(mockERC20.balanceOf(lender2), proposal.loanAmount - debt - protocolFee);
         assertEq(mockERC20.balanceOf(lender), debt);
-        assertEq(mockERC20.balanceOf(protocolFeeRecipient), (debt * protocolFeeBasisPoints) / 10_000);
+        assertEq(
+            mockERC20.balanceOf(protocolFeeRecipient),
+            (debt * protocolFeeBasisPoints) / (10_000 - protocolFeeBasisPoints)
+        );
 
         uint256 positionId = mockNegRiskAdapter.getPositionId(negRiskQuestionId, true);
 
@@ -67,7 +70,7 @@ contract PredictDotLoan_Refinance_NegRisk_Borrower_Test is PredictDotLoan_Test {
         mockERC20.approve(address(predictDotLoan), proposal.loanAmount);
 
         uint256 debt = predictDotLoan.calculateDebt(1);
-        uint256 protocolFee = (debt * protocolFeeBasisPoints) / 10_000;
+        uint256 protocolFee = (debt * protocolFeeBasisPoints) / (10_000 - protocolFeeBasisPoints);
         uint256 expectedCollateralAmount = (proposal.collateralAmount * (debt + protocolFee)) / proposal.loanAmount;
 
         _assertLoanRefinancedEmitted(proposal, expectedCollateralAmount, debt);
@@ -83,9 +86,15 @@ contract PredictDotLoan_Refinance_NegRisk_Borrower_Test is PredictDotLoan_Test {
             debt + protocolFee
         );
 
-        assertEq(mockERC20.balanceOf(lender2), proposal.loanAmount - debt - (debt * protocolFeeBasisPoints) / 10_000);
+        assertEq(
+            mockERC20.balanceOf(lender2),
+            proposal.loanAmount - debt - (debt * protocolFeeBasisPoints) / (10_000 - protocolFeeBasisPoints)
+        );
         assertEq(mockERC20.balanceOf(lender), debt);
-        assertEq(mockERC20.balanceOf(protocolFeeRecipient), (debt * protocolFeeBasisPoints) / 10_000);
+        assertEq(
+            mockERC20.balanceOf(protocolFeeRecipient),
+            (debt * protocolFeeBasisPoints) / (10_000 - protocolFeeBasisPoints)
+        );
 
         uint256 positionId = mockNegRiskAdapter.getPositionId(negRiskQuestionId, true);
 
@@ -160,7 +169,7 @@ contract PredictDotLoan_Refinance_NegRisk_Borrower_Test is PredictDotLoan_Test {
         vm.prank(lender2);
         mockERC20.approve(address(predictDotLoan), proposal.loanAmount);
 
-        mockNegRiskAdapter.setDetermined(negRiskQuestionId, true);
+        mockNegRiskAdapter.setDetermined(_getNegRiskMarketId(), true);
 
         vm.expectRevert(IPredictDotLoan.MarketResolved.selector);
         vm.prank(borrower);
